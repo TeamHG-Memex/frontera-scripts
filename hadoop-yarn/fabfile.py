@@ -42,13 +42,20 @@ EC2_INSTANCE_STORAGEDEV = "/dev/xvdb" # For Ubuntu r3.xlarge instances
 
 
 #### Package Information ####
+APPS_PREFIX = "/home/ubuntu/Programs"
 HADOOP_VERSION = "2.5.2"
 HADOOP_PACKAGE = "hadoop-%s" % HADOOP_VERSION
 #HADOOP_PACKAGE_URL = "http://apache.mirrors.spacedump.net/hadoop/common/stable/%s.tar.gz" % HADOOP_PACKAGE
-HADOOP_PACKAGE_URL = "http://www.whoishostingthis.com/mirrors/apache/hadoop/common/%(hadoop)s/%(hadoop)s.tar.gz" % {'hadoop': HADOOP_PACKAGE}
-HADOOP_PREFIX = "/home/ubuntu/Programs/%s" % HADOOP_PACKAGE
+HADOOP_PACKAGE_URL = "http://www.whoishostingthis.com/mirrors/apache/hadoop/common/%(hadoop)s/%(hadoop)s.tar.gz" % \
+                     {'hadoop': HADOOP_PACKAGE}
+HADOOP_PREFIX = "%s/%s" % (APPS_PREFIX, HADOOP_PACKAGE)
 HADOOP_CONF = os.path.join(HADOOP_PREFIX, "etc/hadoop")
 
+ZOOKEEPER_VERSION = "3.4.6"
+ZOOKEEPER_PACKAGE = "zookeeper-%s" % ZOOKEEPER_VERSION
+ZOOKEEPER_PACKAGE_URL = "http://www.whoishostingthis.com/mirrors/apache/zookeeper/zookeeper-%(zk)s/zookeeper-%(zk)s.tar.gz" % \
+                        {'zk': ZOOKEEPER_VERSION}
+ZOOKEEPER_PREFIX = "%s/%s" % (APPS_PREFIX, ZOOKEEPER_PACKAGE)
 
 #### Installation information ####
 # Change this to the command you would use to install packages on the
@@ -141,8 +148,9 @@ CONFIGURATION_FILES_CLEAN = False
 HADOOP_TEMP = "/mnt/hadoop/tmp"
 HDFS_DATA_DIR = "/mnt/hdfs/datanode"
 HDFS_NAME_DIR = "/mnt/hdfs/namenode"
+ZK_DATA_DIR = "/var/lib/zookeeper"
 
-IMPORTANT_DIRS = [HADOOP_TEMP, HDFS_DATA_DIR, HDFS_NAME_DIR]
+IMPORTANT_DIRS = [HADOOP_TEMP, HDFS_DATA_DIR, HDFS_NAME_DIR, ZK_DATA_DIR]
 
 # Need to do this in a function so that we can rewrite the values when any
 # of the hosts change in runtime (e.g. EC2 node discovery).
@@ -250,9 +258,9 @@ def bootstrap():
             sudo("rm -rf /tmp/hadoop-ubuntu")
     ensureImportantDirectoriesExist()
     installDependencies()
-    install()
+    installHadoop()
     setupEnvironment()
-    config()
+    configHadoop()
     setupHosts()
     formatHdfs()
 
@@ -269,7 +277,7 @@ def installDependencies():
         sudo(PACKAGE_MANAGER_INSTALL % requirement)
 
 
-def install():
+def installHadoop():
     installDirectory = os.path.dirname(HADOOP_PREFIX)
     run("mkdir -p %s" % installDirectory)
     with cd(installDirectory):
@@ -278,12 +286,31 @@ def install():
                 run("wget -O %s.tar.gz %s" % (HADOOP_PACKAGE, HADOOP_PACKAGE_URL))
         run("tar --overwrite -xf %s.tar.gz" % HADOOP_PACKAGE)
 
+def installZookeeper():
+    installDirectory = os.path.dirname(ZOOKEEPER_PREFIX)
+    run("mkdir -p %s" % installDirectory)
+    with cd(installDirectory):
+        with settings(warn_only=True):
+            if run("test -f %s.tar.gz" % ZOOKEEPER_PACKAGE).failed:
+                run("wget -O %s.tar.gz %s" % (ZOOKEEPER_PACKAGE, ZOOKEEPER_PACKAGE_URL))
+        run("tar --overwrite -xf %s.tar.gz" % ZOOKEEPER_PACKAGE)
 
-def config():
+
+
+def configHadoop():
     changeHadoopProperties("core-site.xml", CORE_SITE_VALUES)
     changeHadoopProperties("hdfs-site.xml", HDFS_SITE_VALUES)
     changeHadoopProperties("yarn-site.xml", YARN_SITE_VALUES)
     changeHadoopProperties("mapred-site.xml", MAPRED_SITE_VALUES)
+
+def configZookeeper():
+    fh = open("zoo.cfg", "w")
+    print >> fh, "tickTime=2000"
+    print >> fh, "clientPort=2181"
+    print >> fh, "dataDir=%s" % (ZK_DATA_DIR)
+    fh.close()
+    put("zoo.cfg", ZOOKEEPER_PREFIX + "/conf/")
+
 
 
 def configRevertPrevious():
