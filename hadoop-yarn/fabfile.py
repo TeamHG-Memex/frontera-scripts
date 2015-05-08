@@ -125,6 +125,7 @@ RESOURCEMANAGER_HOST = "frontera-master"
 NAMENODE_HOST = RESOURCEMANAGER_HOST
 
 SLAVE_HOSTS = ["frontera%d" % i for i in range(1, 2)]
+ZK_HOSTS = []
 
 
 # If you'll be running map reduce jobs, you should choose a host to be
@@ -243,12 +244,11 @@ def debugHosts():
     print("Job Tracker: {}".format(JOBTRACKER_HOST))
     print("Job History: {}".format(JOBHISTORY_HOST))
     print("Slaves: {}".format(SLAVE_HOSTS))
+    print("ZK: {}".format(ZK_HOSTS))
 
 
 def bootstrap():
     with settings(warn_only=True):
-
-
         if EC2_INSTANCE_STORAGEDEV:
             if run("mountpoint /mnt"):
                 sudo("umount /mnt")
@@ -287,6 +287,8 @@ def installHadoop():
         run("tar --overwrite -xf %s.tar.gz" % HADOOP_PACKAGE)
 
 def installZookeeper():
+    if env.host not in ZK_HOSTS:
+        return
     installDirectory = os.path.dirname(ZOOKEEPER_PREFIX)
     run("mkdir -p %s" % installDirectory)
     with cd(installDirectory):
@@ -304,13 +306,25 @@ def configHadoop():
     changeHadoopProperties("mapred-site.xml", MAPRED_SITE_VALUES)
 
 def configZookeeper():
+    if env.host not in ZK_HOSTS:
+        return
     fh = open("zoo.cfg", "w")
     print >> fh, "tickTime=2000"
     print >> fh, "clientPort=2181"
     print >> fh, "dataDir=%s" % (ZK_DATA_DIR)
+    print >> fh, "initLimit=5"
+    print >> fh, "syncLimit=2"
+    id = 1
+    for host in ZK_HOSTS:
+        print >> fh, "server.%d=%s:2888:3888" % (id, host)
+        id += 1
     fh.close()
     put("zoo.cfg", ZOOKEEPER_PREFIX + "/conf/")
 
+    fh = open("myid", "w")
+    print >> fh, "%d" % (ZK_HOSTS.index(env.host) + 1)
+    fh.close()
+    put("myid", ZK_DATA_DIR + "/")
 
 
 def configRevertPrevious():
@@ -368,15 +382,27 @@ def setupHosts():
             run("echo '%s' >> privateIps" % privateIp)
 
 
-def start():
+def startZookeeper():
+    operationOnZookeeperDaemon("start")
+
+def stopZookeeper():
+    operationOnZookeeperDaemon("stop")
+
+def operationOnZookeeperDaemon(command):
+    if env.host not in ZK_HOSTS:
+        return
+    with cd(ZOOKEEPER_PREFIX):
+        run("bin/zkServer.sh %s" % command)
+
+def startHadoop():
     operationOnHadoopDaemons("start")
 
 
-def stop():
+def stopHadoop():
     operationOnHadoopDaemons("stop")
 
 
-def test():
+def testHadoop():
     if env.host == RESOURCEMANAGER_HOST:
         operationInHadoopEnvironment(r"\\$HADOOP_PREFIX/bin/hadoop jar \\$HADOOP_PREFIX/share/hadoop/yarn/hadoop-yarn-applications-distributedshell-%(version)s.jar org.apache.hadoop.yarn.applications.distributedshell.Client --jar \\$HADOOP_PREFIX/share/hadoop/yarn/hadoop-yarn-applications-distributedshell-%(version)s.jar --shell_command date --num_containers %(numContainers)d --master_memory 1024" %
             {"version": HADOOP_VERSION, "numContainers": len(SLAVE_HOSTS)})
@@ -392,7 +418,8 @@ def testMapReduce():
 def ensureDirectoryExists(directory):
     with settings(warn_only=True):
         if run("test -d %s" % directory).failed:
-            run("mkdir -p %s" % directory)
+            sudo("mkdir -p %s" % directory)
+            sudo("chown %(user)s:%(user)s %(dir)s" % {"user": SSH_USER, "dir": directory})
 
 
 @parallel
@@ -535,13 +562,14 @@ def readHostsFromEC2():
     import boto.ec2
 
     global RESOURCEMANAGER_HOST, NAMENODE_HOST, JOBTRACKER_HOST, \
-        JOBHISTORY_HOST, SLAVE_HOSTS
+        JOBHISTORY_HOST, SLAVE_HOSTS, ZK_HOSTS
 
     RESOURCEMANAGER_HOST = None
     NAMENODE_HOST = None
     JOBTRACKER_HOST = None
     JOBHISTORY_HOST = None
     SLAVE_HOSTS = []
+    ZK_HOSTS = []
 
     conn = boto.ec2.connect_to_region(EC2_REGION)
     instances = conn.get_only_instances(filters={'tag:Cluster': EC2_CLUSTER_NAME})
@@ -566,6 +594,9 @@ def readHostsFromEC2():
 
         if not EC2_RM_NONSLAVE or instanceHost != RESOURCEMANAGER_HOST:
             SLAVE_HOSTS.append(instanceHost)
+
+        if "zk" in instanceTags:
+            ZK_HOSTS.append(instanceHost)
 
     if SLAVE_HOSTS:
         if RESOURCEMANAGER_HOST is None:
