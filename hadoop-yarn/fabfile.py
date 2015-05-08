@@ -70,6 +70,15 @@ HBASE_ENVIRONMENT_VARIABLES = [
     ("HBASE_MANAGES_ZK", "false")
 ]
 
+KAFKA_VERSION = "0.8.2.1"
+KAFKA_VERSION2 = "2.10"
+KAFKA_PACKAGE = "kafka-%s" % (KAFKA_VERSION)
+KAFKA_PACKAGE_URL = "http://www.whoishostingthis.com/mirrors/apache/kafka/%(ver)s/kafka_%(ver2)s-%(ver)s.tgz" % \
+                    {"ver": KAFKA_VERSION,
+                     "ver2": KAFKA_VERSION2}
+KAFKA_PREFIX = "%s/%s" % (APPS_PREFIX, KAFKA_PACKAGE)
+KAFKA_CONF = "%s/config" %(KAFKA_PREFIX)
+
 #### Installation information ####
 # Change this to the command you would use to install packages on the
 # remote hosts.
@@ -142,6 +151,7 @@ SLAVE_HOSTS = ["frontera%d" % i for i in range(1, 2)]
 ZK_HOSTS = []
 HBASE_MASTER = None
 HBASE_RS = []
+KAFKA_HOSTS = []
 
 
 # If you'll be running map reduce jobs, you should choose a host to be
@@ -669,6 +679,8 @@ def readHostsFromEC2():
         if "hbase-rs" in instanceTags:
             HBASE_RS.append(instanceHost)
 
+        if "kafka" in instanceTags:
+            KAFKA_HOSTS.append(instanceHost)
 
 
     if SLAVE_HOSTS:
