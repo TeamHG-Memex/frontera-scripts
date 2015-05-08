@@ -43,6 +43,7 @@ EC2_INSTANCE_STORAGEDEV = "/dev/xvdb" # For Ubuntu r3.xlarge instances
 
 #### Package Information ####
 APPS_PREFIX = "/home/ubuntu/Programs"
+JAVA_HOME = "/usr/lib/jvm/java-7-openjdk-amd64"
 HADOOP_VERSION = "2.5.2"
 HADOOP_PACKAGE = "hadoop-%s" % HADOOP_VERSION
 #HADOOP_PACKAGE_URL = "http://apache.mirrors.spacedump.net/hadoop/common/stable/%s.tar.gz" % HADOOP_PACKAGE
@@ -56,6 +57,18 @@ ZOOKEEPER_PACKAGE = "zookeeper-%s" % ZOOKEEPER_VERSION
 ZOOKEEPER_PACKAGE_URL = "http://www.whoishostingthis.com/mirrors/apache/zookeeper/zookeeper-%(zk)s/zookeeper-%(zk)s.tar.gz" % \
                         {'zk': ZOOKEEPER_VERSION}
 ZOOKEEPER_PREFIX = "%s/%s" % (APPS_PREFIX, ZOOKEEPER_PACKAGE)
+
+HBASE_VERSION = "1.0.1"
+HBASE_PACKAGE = "hbase-%s" % (HBASE_VERSION)
+HBASE_PACKAGE_URL = "http://www.whoishostingthis.com/mirrors/apache/hbase/hbase-%(ver)s/hbase-%(ver)s-bin.tar.gz" % \
+                    {"ver": HBASE_VERSION}
+HBASE_PREFIX = "%s/%s" % (APPS_PREFIX, HBASE_PACKAGE)
+HBASE_CONF = "%s/conf" % (HBASE_PREFIX)
+HBASE_ENVIRONMENT_FILE = "%s/hbase-env.sh" % HBASE_CONF
+HBASE_ENVIRONMENT_VARIABLES = [
+    ("JAVA_HOME", JAVA_HOME),
+    ("HBASE_MANAGES_ZK", "false")
+]
 
 #### Installation information ####
 # Change this to the command you would use to install packages on the
@@ -96,13 +109,14 @@ REQUIREMENTS_PRE_COMMANDS = [
 ENVIRONMENT_FILE_NOTAUTOLOADED = True
 ENVIRONMENT_FILE = "/home/ubuntu/hadoop2_env.sh"
 
+
 # Should the ENVIRONMENT_VARIABLES be applies to a clean (empty) environment
 # file or should they simply be merged (only additions and updates) into the
 # existing environment file? In any case, the previous version of the file
 # will be backed up.
 ENVIRONMENT_FILE_CLEAN = False
 ENVIRONMENT_VARIABLES = [
-    ("JAVA_HOME", "/usr/lib/jvm/java-7-openjdk-amd64"), # Debian/Ubuntu 64 bits
+    ("JAVA_HOME", JAVA_HOME), # Debian/Ubuntu 64 bits
     #("JAVA_HOME", "/usr/lib/jvm/java-7-openjdk"), # Arch Linux
     #("JAVA_HOME", "/usr/java/jdk1.7.0_51"), # CentOS
     ("HADOOP_PREFIX", HADOOP_PREFIX),
@@ -126,6 +140,8 @@ NAMENODE_HOST = RESOURCEMANAGER_HOST
 
 SLAVE_HOSTS = ["frontera%d" % i for i in range(1, 2)]
 ZK_HOSTS = []
+HBASE_MASTER = None
+HBASE_RS = []
 
 
 # If you'll be running map reduce jobs, you should choose a host to be
@@ -156,7 +172,7 @@ IMPORTANT_DIRS = [HADOOP_TEMP, HDFS_DATA_DIR, HDFS_NAME_DIR, ZK_DATA_DIR]
 # Need to do this in a function so that we can rewrite the values when any
 # of the hosts change in runtime (e.g. EC2 node discovery).
 def updateHadoopSiteValues():
-    global CORE_SITE_VALUES, HDFS_SITE_VALUES, YARN_SITE_VALUES, MAPRED_SITE_VALUES
+    global CORE_SITE_VALUES, HDFS_SITE_VALUES, YARN_SITE_VALUES, MAPRED_SITE_VALUES, HBASE_SITE_VALUES
 
     CORE_SITE_VALUES = {
         "fs.defaultFS": "hdfs://%s/" % NAMENODE_HOST,
@@ -198,6 +214,11 @@ def updateHadoopSiteValues():
         "mapreduce.reduce.java.opts": "-Xmx768m",
     }
 
+    HBASE_SITE_VALUES = {
+        "hbase.cluster.distributed": "true",
+        "hbase.rootdir": "hdfs://%s:8020/" % NAMENODE_HOST,
+    }
+
 ##############################################################
 #  END OF YOUR CONFIGURATION (CHANGE UNTIL HERE, IF NEEDED)  #
 ##############################################################
@@ -209,6 +230,7 @@ CORE_SITE_VALUES = {}
 HDFS_SITE_VALUES = {}
 YARN_SITE_VALUES = {}
 MAPRED_SITE_VALUES = {}
+HBASE_SITE_VALUES = {}
 
 def bootstrapFabric():
     if EC2:
@@ -245,6 +267,9 @@ def debugHosts():
     print("Job History: {}".format(JOBHISTORY_HOST))
     print("Slaves: {}".format(SLAVE_HOSTS))
     print("ZK: {}".format(ZK_HOSTS))
+    print("HBase Master: {}".format(HBASE_MASTER))
+    print("HBase Region Servers: {}".format(HBASE_RS))
+
 
 
 def bootstrap():
@@ -297,13 +322,32 @@ def installZookeeper():
                 run("wget -O %s.tar.gz %s" % (ZOOKEEPER_PACKAGE, ZOOKEEPER_PACKAGE_URL))
         run("tar --overwrite -xf %s.tar.gz" % ZOOKEEPER_PACKAGE)
 
+def installHBase():
+    if env.host not in HBASE_RS and env.host != HBASE_MASTER:
+        return
+    installDirectory = os.path.dirname(HBASE_PREFIX)
+    run("mkdir -p %s" % installDirectory)
+    with cd(installDirectory):
+        with settings(warn_only=True):
+            if run("test -f %s-bin.tar.gz" % HBASE_PACKAGE).failed:
+                run("wget -O %s-bin.tar.gz %s" % (HBASE_PACKAGE, HBASE_PACKAGE_URL))
+        run("tar --overwrite -xf %s-bin.tar.gz" % HBASE_PACKAGE)
 
 
 def configHadoop():
-    changeHadoopProperties("core-site.xml", CORE_SITE_VALUES)
-    changeHadoopProperties("hdfs-site.xml", HDFS_SITE_VALUES)
-    changeHadoopProperties("yarn-site.xml", YARN_SITE_VALUES)
-    changeHadoopProperties("mapred-site.xml", MAPRED_SITE_VALUES)
+    changeHadoopProperties(HADOOP_CONF, "core-site.xml", CORE_SITE_VALUES)
+    changeHadoopProperties(HADOOP_CONF, "hdfs-site.xml", HDFS_SITE_VALUES)
+    changeHadoopProperties(HADOOP_CONF, "yarn-site.xml", YARN_SITE_VALUES)
+    changeHadoopProperties(HADOOP_CONF, "mapred-site.xml", MAPRED_SITE_VALUES)
+
+def configHBase():
+    changeHadoopProperties(HBASE_CONF, "hbase-site.xml", HBASE_SITE_VALUES)
+
+    fh = open("regionservers", "w")
+    for host in HBASE_RS:
+        print >> fh, host
+    fh.close()
+    put("regionservers", HBASE_CONF + "/")
 
 def configZookeeper():
     if env.host not in ZK_HOSTS:
@@ -333,31 +377,34 @@ def configRevertPrevious():
     revertHadoopPropertiesChange("yarn-site.xml")
     revertHadoopPropertiesChange("mapred-site.xml")
 
-
 def setupEnvironment():
+    updateEnvironment(ENVIRONMENT_FILE, ENVIRONMENT_VARIABLES, ENVIRONMENT_FILE_CLEAN)
+    updateEnvironment(HBASE_ENVIRONMENT_FILE, HBASE_ENVIRONMENT_VARIABLES, ENVIRONMENT_FILE_CLEAN)
+
+def updateEnvironment(filename, vars, is_clean):
     with settings(warn_only=True):
-        if not run("test -f %s" % ENVIRONMENT_FILE).failed:
+        if not run("test -f %s" % filename).failed:
             op = "cp"
 
-            if ENVIRONMENT_FILE_CLEAN:
+            if is_clean:
                 op = "mv"
 
-            currentBakNumber = getLastBackupNumber(ENVIRONMENT_FILE) + 1
+            currentBakNumber = getLastBackupNumber(filename) + 1
             run("%(op)s %(file)s %(file)s.bak%(bakNumber)d" %
-                {"op": op, "file": ENVIRONMENT_FILE, "bakNumber": currentBakNumber})
+                {"op": op, "file": filename, "bakNumber": currentBakNumber})
 
-    run("touch %s" % ENVIRONMENT_FILE)
+    run("touch %s" % filename)
 
-    for variable, value in ENVIRONMENT_VARIABLES:
+    for variable, value in vars:
         lineNumber = run("grep -n 'export\s\+%(var)s\=' '%(file)s' | cut -d : -f 1" %
-                {"var": variable, "file": ENVIRONMENT_FILE})
+                {"var": variable, "file": filename})
         try:
             lineNumber = int(lineNumber)
             run("sed -i \"" + str(lineNumber) + "s@.*@export %(var)s\=%(val)s@\" '%(file)s'" %
-                {"var": variable, "val": value, "file": ENVIRONMENT_FILE})
+                {"var": variable, "val": value, "file": filename})
         except ValueError:
             run("echo \"export %(var)s=%(val)s\" >> \"%(file)s\"" %
-                {"var": variable, "val": value, "file": ENVIRONMENT_FILE})
+                {"var": variable, "val": value, "file": filename})
 
 
 def environmentRevertPrevious():
@@ -397,9 +444,27 @@ def operationOnZookeeperDaemon(command):
 def startHadoop():
     operationOnHadoopDaemons("start")
 
-
 def stopHadoop():
     operationOnHadoopDaemons("stop")
+
+
+def operationOnHBase(command, args):
+    with cd(HBASE_PREFIX):
+        run("bin/hbase-daemon.sh --config %s %s %s" % (HBASE_CONF, command, args))
+
+def startHBase():
+    if env.host == HBASE_MASTER:
+        operationOnHBase("start", "master")
+
+    if env.host in HBASE_RS:
+        operationOnHBase("start", "regionserver")
+
+def stopHBase():
+    if env.host == HBASE_MASTER:
+        operationOnHBase("stop", "master")
+
+    if env.host in HBASE_RS:
+        operationOnHBase("stop", "regionserver")
 
 
 def testHadoop():
@@ -464,11 +529,11 @@ def getLastBackupNumber(filePath):
         return latestBakNumber
 
 
-def changeHadoopProperties(fileName, propertyDict):
+def changeHadoopProperties(path, fileName, propertyDict):
     if not fileName or not propertyDict:
         return
 
-    with cd(HADOOP_CONF):
+    with cd(path):
         with settings(warn_only=True):
             import hashlib
             replaceHadoopPropertyHash = \
@@ -477,7 +542,7 @@ def changeHadoopProperties(fileName, propertyDict):
                 ).hexdigest()
             if run("test %s = `md5sum replaceHadoopProperty.py | cut -d ' ' -f 1`"
                    % replaceHadoopPropertyHash).failed:
-                put("replaceHadoopProperty.py", HADOOP_CONF + "/")
+                put("replaceHadoopProperty.py", path + "/")
                 run("chmod +x replaceHadoopProperty.py")
 
         with settings(warn_only=True):
@@ -562,7 +627,7 @@ def readHostsFromEC2():
     import boto.ec2
 
     global RESOURCEMANAGER_HOST, NAMENODE_HOST, JOBTRACKER_HOST, \
-        JOBHISTORY_HOST, SLAVE_HOSTS, ZK_HOSTS
+        JOBHISTORY_HOST, SLAVE_HOSTS, ZK_HOSTS, HBASE_MASTER, HBASE_RS
 
     RESOURCEMANAGER_HOST = None
     NAMENODE_HOST = None
@@ -597,6 +662,14 @@ def readHostsFromEC2():
 
         if "zk" in instanceTags:
             ZK_HOSTS.append(instanceHost)
+
+        if "hbase-master" in instanceTags:
+            HBASE_MASTER = instanceHost
+
+        if "hbase-rs" in instanceTags:
+            HBASE_RS.append(instanceHost)
+
+
 
     if SLAVE_HOSTS:
         if RESOURCEMANAGER_HOST is None:
