@@ -279,6 +279,7 @@ def debugHosts():
     print("ZK: {}".format(ZK_HOSTS))
     print("HBase Master: {}".format(HBASE_MASTER))
     print("HBase Region Servers: {}".format(HBASE_RS))
+    print("Kafka: {}".format(KAFKA_HOSTS))
 
 
 
