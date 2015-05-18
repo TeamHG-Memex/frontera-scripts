@@ -7,6 +7,9 @@
 #   in a cluster.
 # Associated guide:
 #   http://www.alexjf.net/blog/distributed-systems/hadoop-yarn-installation-definitive-guide
+from spiders import bootstrapSpiders
+from common import installDependencies, readHostsFromEC2
+import common
 
 import os
 from fabric.api import run, cd, env, settings, put, sudo
@@ -22,16 +25,6 @@ SSH_USER = "ubuntu"
 # If you need to specify a special ssh key, do it here (e.g EC2 key)
 #env.key_filename = "~/.ssh/giraph.pem"
 
-
-#### EC2 ####
-# Is this an EC2 deployment? If so, then we'll autodiscover the right nodes.
-EC2 = True
-EC2_REGION = "us-west-2"
-# In case this is an EC2 deployment, all cluster nodes must have a tag with
-# 'Cluster' as key and the following property as value.
-EC2_CLUSTER_NAME = "frontera"
-# Should ResourceManager participate in job execution (also be a slave node?)
-EC2_RM_NONSLAVE = True
 # Read AWS access key details from env if available
 AWS_ACCESSKEY_ID = os.getenv("AWS_ACCESSKEY_ID", "undefined")
 AWS_ACCESSKEY_SECRET = os.getenv("AWS_ACCESSKEY_SECRET", "undefined")
@@ -79,36 +72,6 @@ KAFKA_PACKAGE_URL = "http://www.whoishostingthis.com/mirrors/apache/kafka/%(ver)
 KAFKA_PREFIX = "%s/%s" % (APPS_PREFIX, KAFKA_PACKAGE)
 KAFKA_CONF = "%s/config" %(KAFKA_PREFIX)
 
-#### Installation information ####
-# Change this to the command you would use to install packages on the
-# remote hosts.
-PACKAGE_MANAGER_INSTALL = "apt-get -qq install %s" # Debian/Ubuntu
-#PACKAGE_MANAGER_INSTALL = "pacman -S %s" # Arch Linux
-#PACKAGE_MANAGER_INSTALL = "yum install %s" # CentOS
-
-# Change this list to the list of packages required by Hadoop
-# In principle, should just be a JRE for Hadoop, Python
-# for the Hadoop Configuration replacement script and wget
-# to get the Hadoop package
-REQUIREMENTS = ["wget", "python", "openjdk-7-jdk"] # Debian/Ubuntu
-#REQUIREMENTS = ["wget", "python", "openjdk-7-jre-headless"] # Debian/Ubuntu
-#REQUIREMENTS = ["wget", "python", "jre7-openjdk-headless"] # Arch Linux
-#REQUIREMENTS = ["wget", "python", "java-1.7.0-openjdk-devel"] # CentOS
-
-# Commands to execute (in order) before installing listed requirements
-# (will run as root). Use to configure extra repos or update repos
-# If you want to install Oracle's Java instead of using the OpenJDK that
-# comes preinstalled with most distributions replace the previous options
-# with a variation of the following: (UBUNTU only)
-#REQUIREMENTS = ["wget", "python", "oracle-java7-installer"] # Debian/Ubuntu
-REQUIREMENTS_PRE_COMMANDS = [
-    #"add-apt-repository ppa:webupd8team/java -y",
-    "apt-get -qq update",
-    #"echo debconf shared/accepted-oracle-license-v1-1 select true | debconf-set-selections",
-    #"echo debconf shared/accepted-oracle-license-v1-1 seen true | debconf-set-selections",
-]
-
-
 #### Environment ####
 # Set this to True/False depending on whether or not ENVIRONMENT_FILE
 # points to an environment file that is automatically loaded in a new
@@ -144,26 +107,6 @@ ENVIRONMENT_VARIABLES = [
 #### Host data (for non-EC2 deployments) ####
 HOSTS_FILE="/etc/hosts"
 NET_INTERFACE="eth0"
-RESOURCEMANAGER_HOST = "frontera-master"
-NAMENODE_HOST = RESOURCEMANAGER_HOST
-
-SLAVE_HOSTS = ["frontera%d" % i for i in range(1, 2)]
-ZK_HOSTS = []
-HBASE_MASTER = None
-HBASE_RS = []
-KAFKA_HOSTS = []
-
-
-# If you'll be running map reduce jobs, you should choose a host to be
-# the job tracker
-JOBTRACKER_HOST = SLAVE_HOSTS[0]
-JOBTRACKER_PORT = 8021
-
-# If you'll run MapReduce jobs, you might want to set a JobHistory server.
-# e.g: JOBHISTORY_HOST = "jobhistory.alexjf.net"
-JOBHISTORY_HOST = JOBTRACKER_HOST
-JOBHISTORY_PORT = 10020
-
 
 #### Configuration ####
 # Should the configuration options be applied to a clean (empty) configuration
@@ -186,7 +129,7 @@ def updateHadoopSiteValues():
     global CORE_SITE_VALUES, HDFS_SITE_VALUES, YARN_SITE_VALUES, MAPRED_SITE_VALUES, HBASE_SITE_VALUES
 
     CORE_SITE_VALUES = {
-        "fs.defaultFS": "hdfs://%s/" % NAMENODE_HOST,
+        "fs.defaultFS": "hdfs://%s/" % common.NAMENODE_HOST,
         "fs.s3n.awsAccessKeyId": AWS_ACCESSKEY_ID,
         "fs.s3n.awsSecretAccessKey": AWS_ACCESSKEY_SECRET,
         "hadoop.tmp.dir": HADOOP_TEMP
@@ -199,7 +142,7 @@ def updateHadoopSiteValues():
     }
 
     YARN_SITE_VALUES = {
-        "yarn.resourcemanager.hostname": RESOURCEMANAGER_HOST,
+        "yarn.resourcemanager.hostname": common.RESOURCEMANAGER_HOST,
         "yarn.scheduler.minimum-allocation-mb": 128,
         "yarn.scheduler.maximum-allocation-mb": 1024,
         "yarn.scheduler.minimum-allocation-vcores": 1,
@@ -227,7 +170,7 @@ def updateHadoopSiteValues():
 
     HBASE_SITE_VALUES = {
         "hbase.cluster.distributed": "true",
-        "hbase.rootdir": "hdfs://%s:8020/" % NAMENODE_HOST,
+        "hbase.rootdir": "hdfs://%s:8020/" % common.NAMENODE_HOST,
     }
 
 ##############################################################
@@ -244,25 +187,26 @@ MAPRED_SITE_VALUES = {}
 HBASE_SITE_VALUES = {}
 
 def bootstrapFabric():
-    if EC2:
+    if common.EC2:
         readHostsFromEC2()
 
     updateHadoopSiteValues()
 
     env.user = SSH_USER
-    hosts = [NAMENODE_HOST, RESOURCEMANAGER_HOST, JOBHISTORY_HOST] + SLAVE_HOSTS
+    hosts = [common.NAMENODE_HOST, common.RESOURCEMANAGER_HOST, common.JOBHISTORY_HOST] + common.SLAVE_HOSTS + \
+            common.KAFKA_HOSTS + common.ZK_HOSTS + [common.HBASE_MASTER] + common.HBASE_RS + common.SPIDERS_HOSTS
     seen = set()
     # Remove empty hosts and duplicates
     cleanedHosts = [host for host in hosts if host and host not in seen and not seen.add(host)]
     env.hosts = cleanedHosts
 
-    if JOBTRACKER_HOST:
+    if common.JOBTRACKER_HOST:
         MAPRED_SITE_VALUES["mapreduce.jobtracker.address"] = "%s:%s" % \
-            (JOBTRACKER_HOST, JOBTRACKER_PORT)
+            (common.JOBTRACKER_HOST, common.JOBTRACKER_PORT)
 
-    if JOBHISTORY_HOST:
+    if common.JOBHISTORY_HOST:
         MAPRED_SITE_VALUES["mapreduce.jobhistory.address"] = "%s:%s" % \
-            (JOBHISTORY_HOST, JOBHISTORY_PORT)
+            (common.JOBHISTORY_HOST, common.JOBHISTORY_PORT)
 
 
 # MAIN FUNCTIONS
@@ -272,15 +216,16 @@ def forceStopEveryJava():
 
 @runs_once
 def debugHosts():
-    print("Resource Manager: {}".format(RESOURCEMANAGER_HOST))
-    print("Name node: {}".format(NAMENODE_HOST))
-    print("Job Tracker: {}".format(JOBTRACKER_HOST))
-    print("Job History: {}".format(JOBHISTORY_HOST))
-    print("Slaves: {}".format(SLAVE_HOSTS))
-    print("ZK: {}".format(ZK_HOSTS))
-    print("HBase Master: {}".format(HBASE_MASTER))
-    print("HBase Region Servers: {}".format(HBASE_RS))
-    print("Kafka: {}".format(KAFKA_HOSTS))
+    print("Resource Manager: {}".format(common.RESOURCEMANAGER_HOST))
+    print("Name node: {}".format(common.NAMENODE_HOST))
+    print("Job Tracker: {}".format(common.JOBTRACKER_HOST))
+    print("Job History: {}".format(common.JOBHISTORY_HOST))
+    print("Slaves: {}".format(common.SLAVE_HOSTS))
+    print("ZK: {}".format(common.ZK_HOSTS))
+    print("HBase Master: {}".format(common.HBASE_MASTER))
+    print("HBase Region Servers: {}".format(common.HBASE_RS))
+    print("Kafka: {}".format(common.KAFKA_HOSTS))
+    print("Spiders: {}".format(common.SPIDERS_HOSTS))
 
 
 
@@ -290,7 +235,7 @@ def bootstrap():
             if run("mountpoint /mnt"):
                 sudo("umount /mnt")
             sudo("mkfs.ext4 %s" % EC2_INSTANCE_STORAGEDEV)
-            sudo("mount %s /mnt" % EC2_INSTANCE_STORAGEDEV)
+            sudo("mount %s /mnt" % EC2_INSTANCE_STORAGEDEV) # FIXME: mount with noatime
             sudo("chmod 0777 /mnt")
             sudo("rm -rf /tmp/hadoop-ubuntu")
     ensureImportantDirectoriesExist()
@@ -313,13 +258,6 @@ def ensureImportantDirectoriesExist():
         ensureDirectoryExists(importantDir)
 
 
-def installDependencies():
-    for command in REQUIREMENTS_PRE_COMMANDS:
-        sudo(command)
-    for requirement in REQUIREMENTS:
-        sudo(PACKAGE_MANAGER_INSTALL % requirement)
-
-
 def installHadoop():
     installDirectory = os.path.dirname(HADOOP_PREFIX)
     run("mkdir -p %s" % installDirectory)
@@ -330,7 +268,7 @@ def installHadoop():
         run("tar --overwrite -xf %s.tar.gz" % HADOOP_PACKAGE)
 
 def installZookeeper():
-    if env.host not in ZK_HOSTS:
+    if env.host not in common.ZK_HOSTS:
         return
     installDirectory = os.path.dirname(ZOOKEEPER_PREFIX)
     run("mkdir -p %s" % installDirectory)
@@ -341,7 +279,7 @@ def installZookeeper():
         run("tar --overwrite -xf %s.tar.gz" % ZOOKEEPER_PACKAGE)
 
 def installHBase():
-    if env.host not in HBASE_RS and env.host != HBASE_MASTER:
+    if env.host not in common.HBASE_RS and env.host != common.HBASE_MASTER:
         return
     installDirectory = os.path.dirname(HBASE_PREFIX)
     run("mkdir -p %s" % installDirectory)
@@ -352,7 +290,7 @@ def installHBase():
         run("tar --overwrite -xf %s-bin.tar.gz" % HBASE_PACKAGE)
 
 def installKafka():
-    if env.host not in KAFKA_HOSTS:
+    if env.host not in common.KAFKA_HOSTS:
         return
     installDirectory = os.path.dirname(KAFKA_PREFIX)
     run("mkdir -p %s" % installDirectory)
@@ -374,13 +312,14 @@ def configHBase():
     changeHadoopProperties(HBASE_CONF, "hbase-site.xml", HBASE_SITE_VALUES)
 
     fh = open("regionservers", "w")
-    for host in HBASE_RS:
+    for host in common.HBASE_RS:
         print >> fh, host
     fh.close()
     put("regionservers", HBASE_CONF + "/")
+    os.remove("regionservers")
 
 def configZookeeper():
-    if env.host not in ZK_HOSTS:
+    if env.host not in common.ZK_HOSTS:
         return
     fh = open("zoo.cfg", "w")
     print >> fh, "tickTime=2000"
@@ -389,31 +328,34 @@ def configZookeeper():
     print >> fh, "initLimit=5"
     print >> fh, "syncLimit=2"
     id = 1
-    for host in ZK_HOSTS:
+    for host in common.ZK_HOSTS:
         print >> fh, "server.%d=%s:2888:3888" % (id, host)
         id += 1
     fh.close()
     put("zoo.cfg", ZOOKEEPER_PREFIX + "/conf/")
+    os.remove("zoo.cfg")
 
     fh = open("myid", "w")
-    print >> fh, "%d" % (ZK_HOSTS.index(env.host) + 1)
+    print >> fh, "%d" % (common.ZK_HOSTS.index(env.host) + 1)
     fh.close()
     put("myid", ZK_DATA_DIR + "/")
+    os.remove("myid")
 
 def configKafka():
-    if env.host not in KAFKA_HOSTS:
+    if env.host not in common.KAFKA_HOSTS:
         return
 
     fh = open("config-templates/kafka-server.properties")
     template = fh.read()
     fh.close()
 
-    index = KAFKA_HOSTS.index(env.host)
+    index = common.KAFKA_HOSTS.index(env.host)
     fh = open("server-generated.properties", "w")
     config = template.format(broker_id=str(index), log_dirs=KAFKA_LOG_DIRS)
     fh.write(config)
     fh.close()
     put("server-generated.properties", KAFKA_CONF + "/")
+    os.remove("server-generated.properties")
 
 def configRevertPrevious():
     revertHadoopPropertiesChange("core-site.xml")
@@ -456,7 +398,7 @@ def environmentRevertPrevious():
 
 
 def formatHdfs():
-    if env.host == NAMENODE_HOST:
+    if env.host == common.NAMENODE_HOST:
         operationInHadoopEnvironment(r"\\$HADOOP_PREFIX/bin/hdfs namenode -format")
 
 
@@ -465,7 +407,7 @@ def setupHosts():
     privateIps = execute(getPrivateIp)
     execute(updateHosts, privateIps)
 
-    if env.host == RESOURCEMANAGER_HOST:
+    if env.host == common.RESOURCEMANAGER_HOST:
         run("rm -f privateIps")
         run("touch privateIps")
 
@@ -480,19 +422,19 @@ def stopZookeeper():
     operationOnZookeeperDaemon("stop")
 
 def operationOnZookeeperDaemon(command):
-    if env.host not in ZK_HOSTS:
+    if env.host not in common.ZK_HOSTS:
         return
     with cd(ZOOKEEPER_PREFIX):
         run("bin/zkServer.sh %s" % command)
 
 def startKafka():
-    if env.host not in KAFKA_HOSTS:
+    if env.host not in common.KAFKA_HOSTS:
         return
     with cd(KAFKA_PREFIX):
         run("nohup bin/kafka-server-start.sh -daemon config/server-generated.properties")
 
 def stopKafka():
-    if env.host not in KAFKA_HOSTS:
+    if env.host not in common.KAFKA_HOSTS:
         return
     with cd(KAFKA_PREFIX):
         run("bin/kafka-server-stop.sh")
@@ -509,28 +451,28 @@ def operationOnHBase(command, args):
         run("bin/hbase-daemon.sh --config %s %s %s" % (HBASE_CONF, command, args))
 
 def startHBase():
-    if env.host == HBASE_MASTER:
+    if env.host == common.HBASE_MASTER:
         operationOnHBase("start", "master")
 
-    if env.host in HBASE_RS:
+    if env.host in common.HBASE_RS:
         operationOnHBase("start", "regionserver")
 
 def stopHBase():
-    if env.host == HBASE_MASTER:
+    if env.host == common.HBASE_MASTER:
         operationOnHBase("stop", "master")
 
-    if env.host in HBASE_RS:
+    if env.host in common.HBASE_RS:
         operationOnHBase("stop", "regionserver")
 
 
 def testHadoop():
-    if env.host == RESOURCEMANAGER_HOST:
+    if env.host == common.RESOURCEMANAGER_HOST:
         operationInHadoopEnvironment(r"\\$HADOOP_PREFIX/bin/hadoop jar \\$HADOOP_PREFIX/share/hadoop/yarn/hadoop-yarn-applications-distributedshell-%(version)s.jar org.apache.hadoop.yarn.applications.distributedshell.Client --jar \\$HADOOP_PREFIX/share/hadoop/yarn/hadoop-yarn-applications-distributedshell-%(version)s.jar --shell_command date --num_containers %(numContainers)d --master_memory 1024" %
-            {"version": HADOOP_VERSION, "numContainers": len(SLAVE_HOSTS)})
+            {"version": HADOOP_VERSION, "numContainers": len(common.SLAVE_HOSTS)})
 
 
 def testMapReduce():
-    if env.host == RESOURCEMANAGER_HOST:
+    if env.host == common.RESOURCEMANAGER_HOST:
         operationInHadoopEnvironment(r"\\$HADOOP_PREFIX/bin/hadoop dfs -rm -f -r out")
         operationInHadoopEnvironment(r"\\$HADOOP_PREFIX/bin/hadoop jar \\$HADOOP_PREFIX/share/hadoop/mapreduce/hadoop-mapreduce-examples-%s.jar randomwriter out" % HADOOP_VERSION)
 
@@ -545,7 +487,7 @@ def ensureDirectoryExists(directory):
 
 @parallel
 def getPrivateIp():
-    if not EC2:
+    if not common.EC2:
         return run("ifconfig %s | grep 'inet\s\+' | awk '{print $2}' | cut -d':' -f2" % NET_INTERFACE).strip()
     else:
         return run("wget -qO- http://instance-data/latest/meta-data/local-ipv4")
@@ -658,91 +600,24 @@ def operationInHadoopEnvironment(operation):
 
 def operationOnHadoopDaemons(operation):
     # Start/Stop NameNode
-    if (env.host == NAMENODE_HOST):
+    if (env.host == common.NAMENODE_HOST):
         operationInHadoopEnvironment(r"\\$HADOOP_PREFIX/sbin/hadoop-daemon.sh %s namenode" % operation)
 
     # Start/Stop DataNode on all slave hosts
-    if env.host in SLAVE_HOSTS:
+    if env.host in common.SLAVE_HOSTS:
         operationInHadoopEnvironment(r"\\$HADOOP_PREFIX/sbin/hadoop-daemon.sh %s datanode" % operation)
 
     # Start/Stop ResourceManager
-    if (env.host == RESOURCEMANAGER_HOST):
+    if (env.host == common.RESOURCEMANAGER_HOST):
         operationInHadoopEnvironment(r"\\$HADOOP_PREFIX/sbin/yarn-daemon.sh %s resourcemanager" % operation)
 
     # Start/Stop NodeManager on all container hosts
-    if env.host in SLAVE_HOSTS:
+    if env.host in common.SLAVE_HOSTS:
         operationInHadoopEnvironment(r"\\$HADOOP_PREFIX/sbin/yarn-daemon.sh %s nodemanager" % operation)
 
     # Start/Stop JobHistory daemon
-    if (env.host == JOBHISTORY_HOST):
+    if (env.host == common.JOBHISTORY_HOST):
         operationInHadoopEnvironment(r"\\$HADOOP_PREFIX/sbin/mr-jobhistory-daemon.sh %s historyserver" % operation)
     run("jps")
-
-
-def readHostsFromEC2():
-    import boto.ec2
-
-    global RESOURCEMANAGER_HOST, NAMENODE_HOST, JOBTRACKER_HOST, \
-        JOBHISTORY_HOST, SLAVE_HOSTS, ZK_HOSTS, HBASE_MASTER, HBASE_RS
-
-    RESOURCEMANAGER_HOST = None
-    NAMENODE_HOST = None
-    JOBTRACKER_HOST = None
-    JOBHISTORY_HOST = None
-    SLAVE_HOSTS = []
-    ZK_HOSTS = []
-
-    conn = boto.ec2.connect_to_region(EC2_REGION)
-    instances = conn.get_only_instances(filters={'tag:Cluster': EC2_CLUSTER_NAME})
-
-    for instance in instances:
-        instanceTags = instance.tags
-        instanceHost = instance.public_dns_name
-        if not instanceHost:
-            continue
-
-        if "resourcemanager" in instanceTags:
-            RESOURCEMANAGER_HOST = instanceHost
-
-        if "namenode" in instanceTags:
-            NAMENODE_HOST = instanceHost
-
-        if "jobhistory" in instanceTags:
-            JOBHISTORY_HOST = instanceHost
-
-        if "jobtracker" in instanceTags:
-            JOBTRACKER_HOST = instanceHost
-
-        if not EC2_RM_NONSLAVE or instanceHost != RESOURCEMANAGER_HOST:
-            SLAVE_HOSTS.append(instanceHost)
-
-        if "zk" in instanceTags:
-            ZK_HOSTS.append(instanceHost)
-
-        if "hbase-master" in instanceTags:
-            HBASE_MASTER = instanceHost
-
-        if "hbase-rs" in instanceTags:
-            HBASE_RS.append(instanceHost)
-
-        if "kafka" in instanceTags:
-            KAFKA_HOSTS.append(instanceHost)
-
-
-    if SLAVE_HOSTS:
-        if RESOURCEMANAGER_HOST is None:
-            RESOURCEMANAGER_HOST = SLAVE_HOSTS[0]
-
-            if EC2_RM_NONSLAVE:
-                SLAVE_HOSTS.remove(0)
-
-        if NAMENODE_HOST is None:
-            NAMENODE_HOST = RESOURCEMANAGER_HOST
-
-        if JOBTRACKER_HOST is None:
-            JOBTRACKER_HOST = SLAVE_HOSTS[0]
-
-        if JOBHISTORY_HOST is None:
-            JOBHISTORY_HOST = SLAVE_HOSTS[0]
 
 bootstrapFabric()
