@@ -72,7 +72,7 @@ HBASE_ENVIRONMENT_VARIABLES = [
 
 KAFKA_VERSION = "0.8.2.1"
 KAFKA_VERSION2 = "2.10"
-KAFKA_PACKAGE = "kafka-%s" % (KAFKA_VERSION)
+KAFKA_PACKAGE = "kafka_%s-%s" % (KAFKA_VERSION2, KAFKA_VERSION)
 KAFKA_PACKAGE_URL = "http://www.whoishostingthis.com/mirrors/apache/kafka/%(ver)s/kafka_%(ver2)s-%(ver)s.tgz" % \
                     {"ver": KAFKA_VERSION,
                      "ver2": KAFKA_VERSION2}
@@ -176,8 +176,9 @@ HADOOP_TEMP = "/mnt/hadoop/tmp"
 HDFS_DATA_DIR = "/mnt/hdfs/datanode"
 HDFS_NAME_DIR = "/mnt/hdfs/namenode"
 ZK_DATA_DIR = "/var/lib/zookeeper"
+KAFKA_LOG_DIRS = "/mnt/kafka"
 
-IMPORTANT_DIRS = [HADOOP_TEMP, HDFS_DATA_DIR, HDFS_NAME_DIR, ZK_DATA_DIR]
+IMPORTANT_DIRS = [HADOOP_TEMP, HDFS_DATA_DIR, HDFS_NAME_DIR, ZK_DATA_DIR, KAFKA_LOG_DIRS]
 
 # Need to do this in a function so that we can rewrite the values when any
 # of the hosts change in runtime (e.g. EC2 node discovery).
@@ -295,8 +296,14 @@ def bootstrap():
     ensureImportantDirectoriesExist()
     installDependencies()
     installHadoop()
+    installZookeeper()
+    installHBase()
+    installKafka()
     setupEnvironment()
     configHadoop()
+    configZookeeper()
+    configHBase()
+    configKafka()
     setupHosts()
     formatHdfs()
 
@@ -344,6 +351,18 @@ def installHBase():
                 run("wget -O %s-bin.tar.gz %s" % (HBASE_PACKAGE, HBASE_PACKAGE_URL))
         run("tar --overwrite -xf %s-bin.tar.gz" % HBASE_PACKAGE)
 
+def installKafka():
+    if env.host not in KAFKA_HOSTS:
+        return
+    installDirectory = os.path.dirname(KAFKA_PREFIX)
+    run("mkdir -p %s" % installDirectory)
+    with cd(installDirectory):
+        with settings(warn_only=True):
+            if run("test -f %s.tar.gz" % KAFKA_PACKAGE).failed:
+                run("wget -O %s.tar.gz %s" % (KAFKA_PACKAGE, KAFKA_PACKAGE_URL))
+        run("tar --overwrite -xf %s.tar.gz" % KAFKA_PACKAGE)
+
+
 
 def configHadoop():
     changeHadoopProperties(HADOOP_CONF, "core-site.xml", CORE_SITE_VALUES)
@@ -381,6 +400,20 @@ def configZookeeper():
     fh.close()
     put("myid", ZK_DATA_DIR + "/")
 
+def configKafka():
+    if env.host not in KAFKA_HOSTS:
+        return
+
+    fh = open("config-templates/kafka-server.properties")
+    template = fh.read()
+    fh.close()
+
+    index = KAFKA_HOSTS.index(env.host)
+    fh = open("server-generated.properties", "w")
+    config = template.format(broker_id=str(index), log_dirs=KAFKA_LOG_DIRS)
+    fh.write(config)
+    fh.close()
+    put("server-generated.properties", KAFKA_CONF + "/")
 
 def configRevertPrevious():
     revertHadoopPropertiesChange("core-site.xml")
@@ -451,6 +484,18 @@ def operationOnZookeeperDaemon(command):
         return
     with cd(ZOOKEEPER_PREFIX):
         run("bin/zkServer.sh %s" % command)
+
+def startKafka():
+    if env.host not in KAFKA_HOSTS:
+        return
+    with cd(KAFKA_PREFIX):
+        run("nohup bin/kafka-server-start.sh -daemon config/server-generated.properties")
+
+def stopKafka():
+    if env.host not in KAFKA_HOSTS:
+        return
+    with cd(KAFKA_PREFIX):
+        run("bin/kafka-server-stop.sh")
 
 def startHadoop():
     operationOnHadoopDaemons("start")
