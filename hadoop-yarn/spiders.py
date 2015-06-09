@@ -5,6 +5,9 @@ from fabric.api import run, cd, env, settings, put, sudo
 from fabric.decorators import runs_once, parallel
 from fabric.tasks import execute
 
+FRONTERA_TAG = "v.0"
+FRONTERA_DEST_DIR = "/home/ubuntu/frontera"
+
 def setupDnsmasq():
     fh = open("resolv.dnsmasq.conf", "w")
     print >> fh, """
@@ -38,10 +41,19 @@ no-dhcp-interface=lo
     os.remove("resolv.dnsmasq.conf")
 
 
+def cloneFrontera():
+    run("rm -rf %s" % FRONTERA_DEST_DIR)
+    run("git clone -q https://github.com/scrapinghub/frontera.git %s" % FRONTERA_DEST_DIR)
+    with cd(FRONTERA_DEST_DIR):
+        run("git checkout -q %s" % FRONTERA_TAG)
+
 
 def bootstrapSpiders():
-    installDependencies(["dnsmasq", "g++", "libpython-dev", "python-dev", "python-lxml", "python-twisted",
-                         "python-openssl", "python-w3lib", "python-cssselect", "python-six", "python-pip"])
-    sudo("pip install -q happybase kafka-python nltk sqlalchemy tldextract queuelib")
+    installDependencies(["dnsmasq", "build-essential", "libpython-dev", "python-dev", "python-lxml", "python-twisted",
+                         "python-openssl", "python-w3lib", "python-cssselect", "python-six", "python-pip", "git"])
+    cloneFrontera()
+
+    sudo("pip install -q nltk scrapy")
+    sudo("pip install -q -r %s/requirements.txt" % FRONTERA_DEST_DIR)
     setupDnsmasq()
 
