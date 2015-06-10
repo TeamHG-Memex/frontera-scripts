@@ -32,10 +32,8 @@ interface=lo
 no-dhcp-interface=lo
 """
     fh.close()
-    put("resolv.dnsmasq.conf")
-    put("dnsmasq.conf")
-    sudo("mv ~/resolv.dnsmasq.conf /etc/")
-    sudo("mv ~/dnsmasq.conf /etc/")
+    put("resolv.dnsmasq.conf", "/etc/resolv.dnsmasq.conf", use_sudo=True)
+    put("dnsmasq.conf", "/etc/dnsmasq.conf", use_sudo=True)
     sudo("service dnsmasq restart")
     os.remove("dnsmasq.conf")
     os.remove("resolv.dnsmasq.conf")
@@ -46,6 +44,14 @@ def cloneFrontera():
     run("git clone -q https://github.com/scrapinghub/frontera.git %s" % FRONTERA_DEST_DIR)
     with cd(FRONTERA_DEST_DIR):
         run("git checkout -q %s" % FRONTERA_TAG)
+
+    # adding Frontera to python module path
+    python_path = "/usr/lib/python2.7/dist-packages/ubuntu.pth"
+    sudo("rm -f %s" % python_path)
+    fh = open("ubuntu.pth", "w")
+    print >> fh, FRONTERA_DEST_DIR
+    fh.close()
+    put("ubuntu.pth", python_path, use_sudo=True)
 
 
 def bootstrapSpiders():
