@@ -52,6 +52,7 @@ def cloneFrontera():
     print >> fh, FRONTERA_DEST_DIR
     fh.close()
     put("ubuntu.pth", python_path, use_sudo=True)
+    os.remove("ubuntu.pth")
 
 
 def bootstrapSpiders():
