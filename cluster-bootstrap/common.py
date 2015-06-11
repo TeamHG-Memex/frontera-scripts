@@ -20,7 +20,11 @@ ZK_HOSTS = []
 HBASE_MASTER = None
 HBASE_RS = []
 KAFKA_HOSTS = []
-SPIDERS_HOSTS = []
+HOSTS = {
+    "frontera_workers": [],
+    "frontera_spiders": []
+}
+INSTANCES = {}
 
 
 # If you'll be running map reduce jobs, you should choose a host to be
@@ -76,7 +80,7 @@ def readHostsFromEC2():
     import boto.ec2
 
     global RESOURCEMANAGER_HOST, NAMENODE_HOST, JOBTRACKER_HOST, KAFKA_HOSTS, \
-        JOBHISTORY_HOST, SLAVE_HOSTS, ZK_HOSTS, HBASE_MASTER, HBASE_RS, SPIDERS_HOSTS
+        JOBHISTORY_HOST, SLAVE_HOSTS, ZK_HOSTS, HBASE_MASTER, HBASE_RS, SPIDERS_HOSTS, HOSTS, INSTANCES
 
     RESOURCEMANAGER_HOST = None
     NAMENODE_HOST = None
@@ -85,6 +89,8 @@ def readHostsFromEC2():
     SLAVE_HOSTS = []
     ZK_HOSTS = []
     SPIDERS_HOSTS = []
+    HOSTS= {'frontera_workers': [], 'frontera_spiders': []}
+    INSTANCES = {}
 
     conn = boto.ec2.connect_to_region(EC2_REGION)
     instances = conn.get_only_instances(filters={'tag:Cluster': EC2_CLUSTER_NAME})
@@ -94,6 +100,8 @@ def readHostsFromEC2():
         instanceHost = instance.public_dns_name
         if not instanceHost:
             continue
+
+        INSTANCES[instanceHost] = instance
 
         if "resourcemanager" in instanceTags:
             RESOURCEMANAGER_HOST = instanceHost
@@ -120,7 +128,11 @@ def readHostsFromEC2():
             KAFKA_HOSTS.append(instanceHost)
 
         if "spiders" in instanceTags:
-            SPIDERS_HOSTS.append(instanceHost)
+            HOSTS["frontera_spiders"].append(instanceHost)
+            continue
+
+        if "workers" in instanceTags:
+            HOSTS["frontera_workers"].append(instanceHost)
             continue
 
         if not EC2_RM_NONSLAVE or instanceHost != RESOURCEMANAGER_HOST:

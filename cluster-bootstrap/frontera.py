@@ -1,12 +1,20 @@
 # -*- coding: utf-8 -*-
 import os
 from common import installDependencies
+import common
+import json
 from fabric.api import run, cd, env, settings, put, sudo
 from fabric.decorators import runs_once, parallel
 from fabric.tasks import execute
 
+EC2_INSTANCE_DATA = {}
 FRONTERA_TAG = "v.0"
 FRONTERA_DEST_DIR = "/home/ubuntu/frontera"
+FRONTERA_CLUSTER_CONFIG = {
+    "spider_instances": 0,
+    "sw_instances": 0,
+    "fw_instances": 0
+}
 
 def setupDnsmasq():
     fh = open("resolv.dnsmasq.conf", "w")
@@ -56,6 +64,8 @@ def cloneFrontera():
 
 
 def bootstrapSpiders():
+    if env.host not in common.HOSTS["frontera_spiders"] and env.host not in common.HOSTS["frontera_workers"]:
+        return
     installDependencies(["dnsmasq", "build-essential", "libpython-dev", "python-dev", "python-lxml", "python-twisted",
                          "python-openssl", "python-w3lib", "python-cssselect", "python-six", "python-pip", "git"])
     cloneFrontera()
@@ -63,4 +73,36 @@ def bootstrapSpiders():
     sudo("pip install -q nltk scrapy")
     sudo("pip install -q -r %s/requirements.txt" % FRONTERA_DEST_DIR)
     setupDnsmasq()
+
+def _load_ec2_data():
+    # To update this table, clone this repo:
+    # https://github.com/powdahound/ec2instances.info
+    # and run 'fab build' command.
+    raw_data = json.load(open("instances.json", "r"))
+    for r in raw_data:
+        disks = (r.get("storage") or {}).get("devices", 0)
+
+        EC2_INSTANCE_DATA[r["instance_type"]] = {
+            "instance_type": r["instance_type"],
+            "cpucores": r["vCPU"],
+            "ram": r["memory"],
+            "disks_count": disks
+        }
+
+def configureFrontera():
+    def get_cores_sum(hosts):
+        _sum = 0
+        for host in hosts:
+            type = common.INSTANCES[host].instance_type
+            info = EC2_INSTANCE_DATA[type]
+            _sum += info['cpucores']
+        return _sum
+
+    _load_ec2_data()
+    spider_cores_count = get_cores_sum(common.HOSTS['frontera_spiders'])
+    workers_cores_count = get_cores_sum(common.HOSTS['frontera_workers'])
+    FRONTERA_CLUSTER_CONFIG['spider_instances'] = spider_cores_count
+    FRONTERA_CLUSTER_CONFIG['sw_instances'] = spider_cores_count / 4
+    FRONTERA_CLUSTER_CONFIG['fw_instances'] = spider_cores_count / 4
+    assert FRONTERA_CLUSTER_CONFIG['sw_instances'] + FRONTERA_CLUSTER_CONFIG['fw_instances'] <= workers_cores_count
 

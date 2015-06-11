@@ -7,7 +7,7 @@
 #   in a cluster.
 # Associated guide:
 #   http://www.alexjf.net/blog/distributed-systems/hadoop-yarn-installation-definitive-guide
-from spiders import bootstrapSpiders
+from frontera import bootstrapSpiders, configureFrontera
 from common import installDependencies, readHostsFromEC2
 import common
 
@@ -194,7 +194,8 @@ def bootstrapFabric():
 
     env.user = SSH_USER
     hosts = [common.NAMENODE_HOST, common.RESOURCEMANAGER_HOST, common.JOBHISTORY_HOST] + common.SLAVE_HOSTS + \
-            common.KAFKA_HOSTS + common.ZK_HOSTS + [common.HBASE_MASTER] + common.HBASE_RS + common.SPIDERS_HOSTS
+            common.KAFKA_HOSTS + common.ZK_HOSTS + [common.HBASE_MASTER] + common.HBASE_RS + \
+            common.HOSTS["frontera_spiders"] + common.HOSTS["frontera_workers"]
     seen = set()
     # Remove empty hosts and duplicates
     cleanedHosts = [host for host in hosts if host and host not in seen and not seen.add(host)]
@@ -207,6 +208,8 @@ def bootstrapFabric():
     if common.JOBHISTORY_HOST:
         MAPRED_SITE_VALUES["mapreduce.jobhistory.address"] = "%s:%s" % \
             (common.JOBHISTORY_HOST, common.JOBHISTORY_PORT)
+
+    configureFrontera()
 
 
 # MAIN FUNCTIONS
@@ -225,7 +228,8 @@ def debugHosts():
     print("HBase Master: {}".format(common.HBASE_MASTER))
     print("HBase Region Servers: {}".format(common.HBASE_RS))
     print("Kafka: {}".format(common.KAFKA_HOSTS))
-    print("Spiders: {}".format(common.SPIDERS_HOSTS))
+    print("Spiders: {}".format(common.HOSTS["frontera_spiders"]))
+    print("Frontera workers: {}".format(common.HOSTS["frontera_workers"]))
 
 
 
