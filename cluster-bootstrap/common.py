@@ -67,9 +67,10 @@ REQUIREMENTS_PRE_COMMANDS = [
     #"echo debconf shared/accepted-oracle-license-v1-1 seen true | debconf-set-selections",
 ]
 
-def installDependencies(requirements=None):
-    for command in REQUIREMENTS_PRE_COMMANDS:
-        sudo(command)
+def installDependencies(requirements=None, pre_commands=True):
+    if pre_commands:
+        for command in REQUIREMENTS_PRE_COMMANDS:
+            sudo(command)
 
     r = requirements if requirements else REQUIREMENTS
     for requirement in r:

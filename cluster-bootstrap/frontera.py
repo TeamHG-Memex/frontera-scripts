@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-import os
+import os, os.path
 from common import installDependencies
 import common
 import json
@@ -10,11 +10,10 @@ from fabric.tasks import execute
 EC2_INSTANCE_DATA = {}
 FRONTERA_TAG = "v.0"
 FRONTERA_DEST_DIR = "/home/ubuntu/frontera"
-FRONTERA_CLUSTER_CONFIG = {
-    "spider_instances": 0,
-    "sw_instances": 0,
-    "fw_instances": 0
-}
+FRONTERA_SPIDER_DIR = "/home/ubuntu/topical-spiders"
+FRONTERA_SETTINGS_DIR  = FRONTERA_SPIDER_DIR + "/frontier/"
+FRONTERA_SPIDER_BUNDLE = "topical-spiders.tar.gz"
+FRONTERA_CLUSTER_CONFIG = {}
 
 def setupDnsmasq():
     fh = open("resolv.dnsmasq.conf", "w")
@@ -62,17 +61,72 @@ def cloneFrontera():
     put("ubuntu.pth", python_path, use_sudo=True)
     os.remove("ubuntu.pth")
 
+def deploySpiders():
+    put(FRONTERA_SPIDER_BUNDLE)
+    fname = os.path.basename(FRONTERA_SPIDER_BUNDLE)
+    run("tar --overwrite -xf %s" % fname)
 
-def bootstrapSpiders():
+def generateSpiderConfigs():
+    if env.host not in common.HOSTS["frontera_spiders"]:
+        return
+
+    if not os.path.exists("settings.py"):
+        tpl = open("config-templates/settings_tpl.py").read()
+        rendered = tpl.format(kafka_location=common.KAFKA_HOSTS[0])
+        open("settings.py", "w").write(rendered)
+    put("settings.py", FRONTERA_SETTINGS_DIR)
+
+    tpl = open("config-templates/spiderN_tpl.py").read()
+    partitions = FRONTERA_CLUSTER_CONFIG['spider_partitions_map'][env.host]
+    for instance_id in partitions:
+        rendered = tpl.format(instance_id=instance_id)
+        fname = "spider%d.py" % instance_id
+        open(fname, "w").write(rendered)
+        put(fname, FRONTERA_SETTINGS_DIR)
+        os.remove(fname)
+
+def generateWorkersConfigs():
+    if env.host not in common.HOSTS["frontera_workers"]:
+        return
+
+    if not os.path.exists("workersettings.py"):
+        tpl = open("config-templates/workersettings_tpl.py").read()
+        thrift_servers = str(", ").join(map(lambda rs_host: "'%s'" % rs_host, common.HBASE_RS))
+        rendered = tpl.format(thrift_servers_list=thrift_servers,
+                              partitions_count=FRONTERA_CLUSTER_CONFIG['spider_instances'],
+                              kafka_location=common.KAFKA_HOSTS[0])
+        fh = open("workersettings.py", "w")
+        fh.write(rendered)
+        fh.close()
+    put("workersettings.py", FRONTERA_SETTINGS_DIR)
+
+    tpl = open("config-templates/strategyN_tpl.py").read()
+    partitions = FRONTERA_CLUSTER_CONFIG['sw_partitions'][env.host]
+    for sw_instance_id in partitions:
+        rendered = tpl.format(sw_instance_id=sw_instance_id)
+        fname = "strategy%s.py" % sw_instance_id
+        open(fname, "w").write(rendered)
+        put(fname, FRONTERA_SETTINGS_DIR)
+        os.remove(fname)
+
+
+def bootstrapFrontera():
     if env.host not in common.HOSTS["frontera_spiders"] and env.host not in common.HOSTS["frontera_workers"]:
         return
-    installDependencies(["dnsmasq", "build-essential", "libpython-dev", "python-dev", "python-lxml", "python-twisted",
-                         "python-openssl", "python-w3lib", "python-cssselect", "python-six", "python-pip", "git"])
-    cloneFrontera()
 
-    sudo("pip install -q nltk scrapy")
+    installDependencies(["build-essential", "libpython-dev", "python-dev", "python-pip", "python-twisted", "git",
+                         "python-six", "libsnappy-dev"])
+    cloneFrontera()
+    deploySpiders()
     sudo("pip install -q -r %s/requirements.txt" % FRONTERA_DEST_DIR)
-    setupDnsmasq()
+    if env.host in common.HOSTS["frontera_spiders"]:
+        installDependencies(["dnsmasq", "python-lxml", "python-openssl", "python-w3lib",
+                             "python-cssselect"], pre_commands=False)
+        setupDnsmasq()
+        sudo("pip install -q nltk scrapy")
+        generateSpiderConfigs()
+    if env.host in common.HOSTS["frontera_workers"]:
+        generateWorkersConfigs()
 
 def _load_ec2_data():
     # To update this table, clone this repo:
@@ -89,14 +143,35 @@ def _load_ec2_data():
             "disks_count": disks
         }
 
-def configureFrontera():
-    def get_cores_sum(hosts):
-        _sum = 0
+def calcFronteraLayout():
+    def cores_iter(hosts):
         for host in hosts:
             type = common.INSTANCES[host].instance_type
             info = EC2_INSTANCE_DATA[type]
-            _sum += info['cpucores']
-        return _sum
+            for i in range(info['cpucores']):
+                yield (host, i)
+
+    def get_cores_sum(hosts):
+        return len(list(cores_iter(hosts)))
+
+    def spider_partitions(hosts):
+        partitionsMap = {}
+        partition_id = 0
+        for host, core_id in cores_iter(hosts):
+            partitionsMap.setdefault(host, []).append(partition_id)
+            partition_id += 1
+        return partitionsMap
+
+    def map_workers(it, instances_count):
+        workerMap = {}
+        for partition_id in range(instances_count):
+            try:
+                host, core_id = it.next()
+            except StopIteration:
+                raise Exception("Not enough cores for Frontera workers.")
+            else:
+                workerMap.setdefault(host, []).append(partition_id)
+        return workerMap
 
     _load_ec2_data()
     spider_cores_count = get_cores_sum(common.HOSTS['frontera_spiders'])
@@ -105,4 +180,8 @@ def configureFrontera():
     FRONTERA_CLUSTER_CONFIG['sw_instances'] = spider_cores_count / 4
     FRONTERA_CLUSTER_CONFIG['fw_instances'] = spider_cores_count / 4
     assert FRONTERA_CLUSTER_CONFIG['sw_instances'] + FRONTERA_CLUSTER_CONFIG['fw_instances'] <= workers_cores_count
+    FRONTERA_CLUSTER_CONFIG['spider_partitions_map'] = spider_partitions(common.HOSTS['frontera_spiders'])
 
+    it = cores_iter(common.HOSTS['frontera_workers'])
+    FRONTERA_CLUSTER_CONFIG['sw_partitions'] = map_workers(it, FRONTERA_CLUSTER_CONFIG['sw_instances'])
+    FRONTERA_CLUSTER_CONFIG['fw_partitions'] = map_workers(it, FRONTERA_CLUSTER_CONFIG['fw_instances'])

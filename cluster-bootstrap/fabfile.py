@@ -7,7 +7,8 @@
 #   in a cluster.
 # Associated guide:
 #   http://www.alexjf.net/blog/distributed-systems/hadoop-yarn-installation-definitive-guide
-from frontera import bootstrapSpiders, configureFrontera
+from frontera import bootstrapFrontera, calcFronteraLayout
+import frontera
 from common import installDependencies, readHostsFromEC2
 import common
 
@@ -211,7 +212,7 @@ def bootstrapFabric():
         MAPRED_SITE_VALUES["mapreduce.jobhistory.address"] = "%s:%s" % \
             (common.JOBHISTORY_HOST, common.JOBHISTORY_PORT)
 
-    configureFrontera()
+    calcFronteraLayout()
 
 
 # MAIN FUNCTIONS
@@ -424,6 +425,27 @@ def setupHosts():
         for host, privateIp in privateIps.items():
             run("echo '%s' >> privateIps" % privateIp)
 
+@runs_once
+def deleteFronteraKafkaTopics():
+    if env.host not in common.KAFKA_HOSTS:
+        return
+    with cd(KAFKA_PREFIX):
+        for topic in ['frontier-done', 'frontier-todo', 'frontier-scoring']:
+            run("bin/kafka-topics.sh --delete --topic %s --zookeeper %s" % (topic, common.ZK_HOSTS[0]))
+
+@runs_once
+def createFronteraKafkaTopics():
+    if env.host not in common.KAFKA_HOSTS:
+        return
+    with cd(KAFKA_PREFIX):
+        spider_count = frontera.FRONTERA_CLUSTER_CONFIG['spider_instances']
+        sw_count = frontera.FRONTERA_CLUSTER_CONFIG['sw_instances']
+        run("bin/kafka-topics.sh --create --topic frontier-done --replication-factor 1 --partitions %d --zookeeper %s:2181" %
+            (sw_count, common.ZK_HOSTS[0]))
+        run("bin/kafka-topics.sh --create --topic frontier-todo --replication-factor 1 --partitions %d --zookeeper %s:2181" %
+            (spider_count, common.ZK_HOSTS[0]))
+        run("bin/kafka-topics.sh --create --topic frontier-scoring --replication-factor 1 --partitions %d --zookeeper %s:2181" %
+            (sw_count, common.ZK_HOSTS[0]))
 
 def startZookeeper():
     operationOnZookeeperDaemon("start")
