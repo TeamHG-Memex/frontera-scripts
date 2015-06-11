@@ -171,6 +171,8 @@ def updateHadoopSiteValues():
     HBASE_SITE_VALUES = {
         "hbase.cluster.distributed": "true",
         "hbase.rootdir": "hdfs://%s:8020/" % common.NAMENODE_HOST,
+        "hbase.regionserver.thrift.compact": "true",
+        "hbase.regionserver.thrift.framed": "true",
     }
 
 ##############################################################
@@ -313,6 +315,8 @@ def configHadoop():
     changeHadoopProperties(HADOOP_CONF, "mapred-site.xml", MAPRED_SITE_VALUES)
 
 def configHBase():
+    if env.host not in common.HBASE_RS and env.host != common.HBASE_MASTER:
+        return
     changeHadoopProperties(HBASE_CONF, "hbase-site.xml", HBASE_SITE_VALUES)
 
     fh = open("regionservers", "w")
@@ -369,7 +373,9 @@ def configRevertPrevious():
 
 def setupEnvironment():
     updateEnvironment(ENVIRONMENT_FILE, ENVIRONMENT_VARIABLES, ENVIRONMENT_FILE_CLEAN)
-    updateEnvironment(HBASE_ENVIRONMENT_FILE, HBASE_ENVIRONMENT_VARIABLES, ENVIRONMENT_FILE_CLEAN)
+
+    if env.host in common.HBASE_RS or env.host == common.HBASE_MASTER:
+        updateEnvironment(HBASE_ENVIRONMENT_FILE, HBASE_ENVIRONMENT_VARIABLES, ENVIRONMENT_FILE_CLEAN)
 
 def updateEnvironment(filename, vars, is_clean):
     with settings(warn_only=True):
@@ -460,12 +466,14 @@ def startHBase():
 
     if env.host in common.HBASE_RS:
         operationOnHBase("start", "regionserver")
+        operationOnHBase("start", "thrift")
 
 def stopHBase():
     if env.host == common.HBASE_MASTER:
         operationOnHBase("stop", "master")
 
     if env.host in common.HBASE_RS:
+        operationOnHBase("stop", "thrift")
         operationOnHBase("stop", "regionserver")
 
 
