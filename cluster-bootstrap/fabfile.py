@@ -233,7 +233,8 @@ def debugHosts():
     print("Kafka: {}".format(common.KAFKA_HOSTS))
     print("Spiders: {}".format(common.HOSTS["frontera_spiders"]))
     print("Frontera workers: {}".format(common.HOSTS["frontera_workers"]))
-
+    print("Frontera cluster config:")
+    print frontera.FRONTERA_CLUSTER_CONFIG
 
 
 def bootstrap():
