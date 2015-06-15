@@ -7,7 +7,7 @@
 #   in a cluster.
 # Associated guide:
 #   http://www.alexjf.net/blog/distributed-systems/hadoop-yarn-installation-definitive-guide
-from frontera import bootstrapFrontera, calcFronteraLayout
+from frontera import bootstrapFrontera, calcFronteraLayout, startSpiders, stopSpiders
 import frontera
 from common import installDependencies, readHostsFromEC2
 import common

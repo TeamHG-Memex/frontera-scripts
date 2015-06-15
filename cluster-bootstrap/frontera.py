@@ -70,11 +70,11 @@ def generateSpiderConfigs():
     if env.host not in common.HOSTS["frontera_spiders"]:
         return
 
-    if not os.path.exists("settings.py"):
-        tpl = open("config-templates/settings_tpl.py").read()
-        rendered = tpl.format(kafka_location=common.KAFKA_HOSTS[0])
-        open("settings.py", "w").write(rendered)
+    tpl = open("config-templates/settings_tpl.py").read()
+    rendered = tpl.format(kafka_location=common.KAFKA_HOSTS[0])
+    open("settings.py", "w").write(rendered)
     put("settings.py", FRONTERA_SETTINGS_DIR)
+    os.remove("settings.py")
 
     tpl = open("config-templates/spiderN_tpl.py").read()
     partitions = FRONTERA_CLUSTER_CONFIG['spider_partitions_map'][env.host]
@@ -89,16 +89,17 @@ def generateWorkersConfigs():
     if env.host not in common.HOSTS["frontera_workers"]:
         return
 
-    if not os.path.exists("workersettings.py"):
-        tpl = open("config-templates/workersettings_tpl.py").read()
-        thrift_servers = str(", ").join(map(lambda rs_host: "'%s'" % rs_host, common.HBASE_RS))
-        rendered = tpl.format(thrift_servers_list=thrift_servers,
-                              partitions_count=FRONTERA_CLUSTER_CONFIG['spider_instances'],
-                              kafka_location=common.KAFKA_HOSTS[0])
-        fh = open("workersettings.py", "w")
-        fh.write(rendered)
-        fh.close()
+
+    tpl = open("config-templates/workersettings_tpl.py").read()
+    thrift_servers = str(", ").join(map(lambda rs_host: "'%s'" % rs_host, common.HBASE_RS))
+    rendered = tpl.format(thrift_servers_list=thrift_servers,
+                          partitions_count=FRONTERA_CLUSTER_CONFIG['spider_instances'],
+                          kafka_location=common.KAFKA_HOSTS[0])
+    fh = open("workersettings.py", "w")
+    fh.write(rendered)
+    fh.close()
     put("workersettings.py", FRONTERA_SETTINGS_DIR)
+    os.remove("workersettings.py")
 
     tpl = open("config-templates/strategyN_tpl.py").read()
     partitions = FRONTERA_CLUSTER_CONFIG['sw_partitions'][env.host]
@@ -108,6 +109,62 @@ def generateWorkersConfigs():
         open(fname, "w").write(rendered)
         put(fname, FRONTERA_SETTINGS_DIR)
         os.remove(fname)
+
+def _create_and_put_startup_script(content, filename):
+    fh = open(filename, "w")
+    print fh, content
+    fh.close()
+    put(filename, "/etc/init", use_sudo=True)
+    os.remove(filename)
+
+def generateSpiderStartupScripts():
+    spider_job = """
+    instance $SPIDER_ID
+manual
+description "Topical crawler Scrapy instance"
+setuid ubuntu
+script
+    cd %(spider_dir)s
+    scrapy crawl score -a topic_dict=topical-spiders/ht_dict_sorted_abc.txt -s FRONTIER_SETTINGS=frontier.spider$SPIDER_ID --logfile=spider$SPIDER_ID.log -L INFO
+end script
+""" % {"spider_dir": FRONTERA_SPIDER_DIR}
+
+    _create_and_put_startup_script(spider_job, "topical-spider.conf")
+
+def generateWorkersStartupScripts():
+    job_tpl = """
+    instance $WORKER_ID
+manual
+description "%(descr)s"
+setuid ubuntu
+script
+    cd %(spider_dir)s
+    $(cmd)s
+end script
+"""
+
+    sw_job = job_tpl.format({
+       "spider_dir": FRONTERA_SPIDER_DIR,
+       "cmd": "python -m crawlfrontier.worker.score --config frontier.strategy$WORKER_ID"
+              "--strategy frontier.strategy.topic",
+       "descr": "Frontera strategy worker for topical crawler"
+    })
+
+    _create_and_put_startup_script(sw_job, "frontera-strategy-worker.conf")
+
+    fw_job = job_tpl.format({
+        "spider_dir": FRONTERA_SPIDER_DIR,
+        "cmd": "python -m crawlfrontier.worker.main --config frontier.strategy$WORKER_ID --no-batches --no-scoring",
+        "descr": "Frontera common worker"
+    })
+    _create_and_put_startup_script(fw_job, "frontera-worker.conf")
+
+    b_job = job_tpl.format({
+        "spider_dir": FRONTERA_SPIDER_DIR,
+        "cmd": "python -m crawlfrontier.worker.main --config frontier.strategy$WORKER_ID --no-incoming --no-scoring",
+        "descr": "Frontera new batches generator"
+    })
+    _create_and_put_startup_script(b_job, "frontera-batch-generator.conf")
 
 
 def bootstrapFrontera():
@@ -125,8 +182,12 @@ def bootstrapFrontera():
         setupDnsmasq()
         sudo("pip install -q nltk scrapy")
         generateSpiderConfigs()
+        generateSpiderStartupScripts()
+
     if env.host in common.HOSTS["frontera_workers"]:
         generateWorkersConfigs()
+        generateWorkersStartupScripts()
+
 
 def _load_ec2_data():
     # To update this table, clone this repo:
@@ -185,3 +246,23 @@ def calcFronteraLayout():
     it = cores_iter(common.HOSTS['frontera_workers'])
     FRONTERA_CLUSTER_CONFIG['sw_partitions'] = map_workers(it, FRONTERA_CLUSTER_CONFIG['sw_instances'])
     FRONTERA_CLUSTER_CONFIG['fw_partitions'] = map_workers(it, FRONTERA_CLUSTER_CONFIG['fw_instances'])
+
+
+def startSpiders():
+    if env.host not in common.HOSTS["frontera_spiders"]:
+        return
+
+    partitions = FRONTERA_CLUSTER_CONFIG['spider_partitions_map'][env.host]
+    with cd(FRONTERA_SPIDER_DIR):
+        for instance_id in partitions:
+            sudo("initctl start topical-spider SPIDER_ID=%(instance_id)d" % {"instance_id": instance_id})
+
+
+def stopSpiders():
+    if env.host not in common.HOSTS["frontera_spiders"]:
+        return
+
+    partitions = FRONTERA_CLUSTER_CONFIG['spider_partitions_map'][env.host]
+    with cd(FRONTERA_SPIDER_DIR):
+        for instance_id in partitions:
+            sudo("initctl stop topical-spider SPIDER_ID=%(instance_id)d" % {"instance_id": instance_id})
