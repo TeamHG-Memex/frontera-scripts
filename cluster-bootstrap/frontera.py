@@ -112,7 +112,7 @@ def generateWorkersConfigs():
 
 def _create_and_put_startup_script(content, filename):
     fh = open(filename, "w")
-    print fh, content
+    print >> fh, content
     fh.close()
     put(filename, "/etc/init", use_sudo=True)
     os.remove(filename)
@@ -154,14 +154,14 @@ end script
 
     fw_job = job_tpl.format({
         "spider_dir": FRONTERA_SPIDER_DIR,
-        "cmd": "python -m crawlfrontier.worker.main --config frontier.strategy$WORKER_ID --no-batches --no-scoring",
+        "cmd": "python -m crawlfrontier.worker.main --config frontier.workersettings --no-batches --no-scoring",
         "descr": "Frontera common worker"
     })
     _create_and_put_startup_script(fw_job, "frontera-worker.conf")
 
     b_job = job_tpl.format({
         "spider_dir": FRONTERA_SPIDER_DIR,
-        "cmd": "python -m crawlfrontier.worker.main --config frontier.strategy$WORKER_ID --no-incoming --no-scoring",
+        "cmd": "python -m crawlfrontier.worker.main --config frontier.workersettings --no-incoming --no-scoring",
         "descr": "Frontera new batches generator"
     })
     _create_and_put_startup_script(b_job, "frontera-batch-generator.conf")
