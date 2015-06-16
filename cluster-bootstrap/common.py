@@ -73,8 +73,7 @@ def installDependencies(requirements=None, pre_commands=True):
             sudo(command)
 
     r = requirements if requirements else REQUIREMENTS
-    for requirement in r:
-        sudo(PACKAGE_MANAGER_INSTALL % requirement)
+    sudo(PACKAGE_MANAGER_INSTALL % str(" ").join(r))
 
 
 def readHostsFromEC2():
