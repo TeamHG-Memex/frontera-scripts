@@ -467,7 +467,7 @@ def deleteFronteraKafkaTopics():
     if env.host not in common.KAFKA_HOSTS:
         return
     with cd(KAFKA_PREFIX):
-        for topic in ['frontier-done', 'frontier-todo', 'frontier-scoring']:
+        for topic in ['frontier-done', 'frontier-todo', 'frontier-score']:
             run("bin/kafka-topics.sh --delete --topic %s --zookeeper %s" % (topic, common.ZK_HOSTS[0]))
 
 @runs_once
@@ -481,7 +481,7 @@ def createFronteraKafkaTopics():
             (sw_count, common.ZK_HOSTS[0]))
         run("bin/kafka-topics.sh --create --topic frontier-todo --replication-factor 1 --partitions %d --zookeeper %s:2181" %
             (spider_count, common.ZK_HOSTS[0]))
-        run("bin/kafka-topics.sh --create --topic frontier-scoring --replication-factor 1 --partitions %d --zookeeper %s:2181" %
+        run("bin/kafka-topics.sh --create --topic frontier-score --replication-factor 1 --partitions %d --zookeeper %s:2181" %
             (sw_count, common.ZK_HOSTS[0]))
 
 def startZookeeper():
