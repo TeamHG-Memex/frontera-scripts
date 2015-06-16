@@ -259,7 +259,19 @@ def bootstrap():
     configKafka()
     setupHosts()
     formatHdfs()
+    cleanupHBaseZookeeper()
 
+@runs_once
+def cleanupHBaseZookeeper():
+    fh = open("zkcmds.txt", "w")
+    print >> fh, "rmr /hbase"
+    print >> fh, "quit"
+    fh.close()
+    put("zkcmds.txt", ZOOKEEPER_PREFIX)
+    with cd(ZOOKEEPER_PREFIX):
+        run("bin/zkCli.sh < zkcmds.txt")
+        run("rm -f zkcmds.txt")
+    os.remove("zkcmds.txt")
 
 def ensureImportantDirectoriesExist():
     for importantDir in IMPORTANT_DIRS:
