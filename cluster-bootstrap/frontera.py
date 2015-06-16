@@ -50,7 +50,8 @@ def cloneFrontera():
     run("rm -rf %s" % FRONTERA_DEST_DIR)
     run("git clone -q https://github.com/scrapinghub/frontera.git %s" % FRONTERA_DEST_DIR)
     with cd(FRONTERA_DEST_DIR):
-        run("git checkout -q %s" % FRONTERA_TAG)
+        #run("git checkout -q %s" % FRONTERA_TAG)
+        run("git checkout distributed")
 
     # adding Frontera to python module path
     python_path = "/usr/lib/python2.7/dist-packages/ubuntu.pth"
@@ -125,7 +126,7 @@ description "Topical crawler Scrapy instance"
 setuid ubuntu
 script
     cd %(spider_dir)s
-    scrapy crawl score -a topic_dict=topical-spiders/ht_dict_sorted_abc.txt -s FRONTIER_SETTINGS=frontier.spider$SPIDER_ID --logfile=spider$SPIDER_ID.log -L INFO
+    scrapy crawl score -a topic_dict=topical-spiders/ht_dict_sorted_abc.txt -a disable_classifier=1 -s FRONTIER_SETTINGS=frontier.spider$SPIDER_ID --logfile=spider$SPIDER_ID.log -L INFO
 end script
 """ % {"spider_dir": FRONTERA_SPIDER_DIR}
 
@@ -159,7 +160,7 @@ end script
     )
     _create_and_put_startup_script(fw_job, "frontera-worker.conf")
 
-    batch_job_tpl = """
+    single_job_tpl = """
 manual
 description "{descr}"
 setuid ubuntu
@@ -168,12 +169,19 @@ script
     {cmd}
 end script
 """
-    b_job = batch_job_tpl.format(
+    b_job = single_job_tpl.format(
         spider_dir=FRONTERA_SPIDER_DIR,
         cmd="python -m crawlfrontier.worker.main --config frontier.workersettings --no-incoming --no-scoring",
         descr="Frontera new batches generator"
     )
     _create_and_put_startup_script(b_job, "frontera-batch-generator.conf")
+
+    fs_job = single_job_tpl.format(
+        spider_dir=FRONTERA_SPIDER_DIR,
+        cmd="python -m crawlfrontier.worker.main --config frontier.workersettings --no-batches --no-incoming",
+        descr="Frontera scoring worker"
+    )
+    _create_and_put_startup_script(fs_job, "frontera-scoring-worker.conf")
 
 
 def bootstrapFrontera():
@@ -286,6 +294,7 @@ def _upstartCallWorkers(command):
             })
 
         sudo("initctl %s frontera-batch-generator" % command)
+        sudo("initctl %s frontera-scoring-worker" % command)
 
 
 def startSpiders():
