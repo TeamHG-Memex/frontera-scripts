@@ -259,10 +259,34 @@ def bootstrap():
     configKafka()
     setupHosts()
     formatHdfs()
+
+def postBootstrap():
     cleanupHBaseZookeeper()
+    deleteFronteraKafkaTopics()
+    createFronteraKafkaTopics()
+    createFronteraHBaseNamespace("crawler")
+
+@runs_once
+def createFronteraHBaseNamespace(namespace):
+    if env.host != common.HBASE_MASTER:
+        return
+
+    fh = open("hbasecmd.txt", "w")
+    print >> fh, "create_namespace '%s'" % namespace
+    print >> fh, "quit"
+    fh.close()
+    put("hbasecmd.txt", HBASE_PREFIX)
+    with cd(HBASE_PREFIX):
+        run("bin/hbase shell < hbasecmd.txt")
+        run("rm -f hbasecmd.txt")
+    os.remove("hbasecmd.txt")
+
 
 @runs_once
 def cleanupHBaseZookeeper():
+    if env.host not in common.ZK_HOSTS:
+        return
+
     fh = open("zkcmds.txt", "w")
     print >> fh, "rmr /hbase"
     print >> fh, "quit"
