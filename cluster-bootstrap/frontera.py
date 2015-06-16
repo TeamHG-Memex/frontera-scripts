@@ -133,37 +133,46 @@ end script
 
 def generateWorkersStartupScripts():
     job_tpl = """
-    instance $WORKER_ID
+instance $WORKER_ID
 manual
-description "%(descr)s"
+description "{descr}"
 setuid ubuntu
 script
-    cd %(spider_dir)s
-    $(cmd)s
+    cd {spider_dir}
+    {cmd}
 end script
 """
 
-    sw_job = job_tpl.format({
-       "spider_dir": FRONTERA_SPIDER_DIR,
-       "cmd": "python -m crawlfrontier.worker.score --config frontier.strategy$WORKER_ID"
+    sw_job = job_tpl.format(
+       spider_dir=FRONTERA_SPIDER_DIR,
+       cmd="python -m crawlfrontier.worker.score --config frontier.strategy$WORKER_ID " \
               "--strategy frontier.strategy.topic",
-       "descr": "Frontera strategy worker for topical crawler"
-    })
+       descr="Frontera strategy worker for topical crawler"
+    )
 
     _create_and_put_startup_script(sw_job, "frontera-strategy-worker.conf")
 
-    fw_job = job_tpl.format({
-        "spider_dir": FRONTERA_SPIDER_DIR,
-        "cmd": "python -m crawlfrontier.worker.main --config frontier.workersettings --no-batches --no-scoring",
-        "descr": "Frontera common worker"
-    })
+    fw_job = job_tpl.format(
+        spider_dir=FRONTERA_SPIDER_DIR,
+        cmd="python -m crawlfrontier.worker.main --config frontier.workersettings --no-batches --no-scoring",
+        descr="Frontera common worker"
+    )
     _create_and_put_startup_script(fw_job, "frontera-worker.conf")
 
-    b_job = job_tpl.format({
-        "spider_dir": FRONTERA_SPIDER_DIR,
-        "cmd": "python -m crawlfrontier.worker.main --config frontier.workersettings --no-incoming --no-scoring",
-        "descr": "Frontera new batches generator"
-    })
+    batch_job_tpl = """
+manual
+description "{descr}"
+setuid ubuntu
+script
+    cd {spider_dir}
+    {cmd}
+end script
+"""
+    b_job = batch_job_tpl.format(
+        spider_dir=FRONTERA_SPIDER_DIR,
+        cmd="python -m crawlfrontier.worker.main --config frontier.workersettings --no-incoming --no-scoring",
+        descr="Frontera new batches generator"
+    )
     _create_and_put_startup_script(b_job, "frontera-batch-generator.conf")
 
 
@@ -262,20 +271,21 @@ def _upstartCallWorkers(command):
     if env.host not in common.HOSTS["frontera_workers"]:
         return
 
-    partitions = FRONTERA_CLUSTER_CONFIG['sw_partitions'][env.host]
     with cd(FRONTERA_SPIDER_DIR):
+        partitions = FRONTERA_CLUSTER_CONFIG['sw_partitions'][env.host]
         for instance_id in partitions:
             sudo("initctl %(cmd)s frontera-strategy-worker WORKER_ID=%(instance_id)d" % {
                 "instance_id": instance_id,
                 "cmd": command})
 
-    partitions = FRONTERA_CLUSTER_CONFIG['fw_partitions'][env.host]
-    with cd(FRONTERA_SPIDER_DIR):
+        partitions = FRONTERA_CLUSTER_CONFIG['fw_partitions'][env.host]
         for instance_id in partitions:
             sudo("initctl %(cmd)s frontera-worker WORKER_ID=%(instance_id)d" % {
                 "instance_id": instance_id,
                 "cmd": command
             })
+
+        sudo("initctl %s frontera-batch-generator" % command)
 
 
 def startSpiders():
