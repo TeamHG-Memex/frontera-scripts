@@ -8,7 +8,7 @@ from fabric.decorators import runs_once, parallel
 from fabric.tasks import execute
 
 EC2_INSTANCE_DATA = {}
-FRONTERA_TAG = "v.0"
+FRONTERA_TAG = "v.1"
 FRONTERA_DEST_DIR = "/home/ubuntu/frontera"
 FRONTERA_SPIDER_DIR = "/home/ubuntu/topical-spiders"
 FRONTERA_SETTINGS_DIR  = FRONTERA_SPIDER_DIR + "/frontier/"
@@ -248,21 +248,44 @@ def calcFronteraLayout():
     FRONTERA_CLUSTER_CONFIG['fw_partitions'] = map_workers(it, FRONTERA_CLUSTER_CONFIG['fw_instances'])
 
 
-def startSpiders():
+def _upstartCallSpiders(command):
     if env.host not in common.HOSTS["frontera_spiders"]:
         return
 
     partitions = FRONTERA_CLUSTER_CONFIG['spider_partitions_map'][env.host]
     with cd(FRONTERA_SPIDER_DIR):
         for instance_id in partitions:
-            sudo("initctl start topical-spider SPIDER_ID=%(instance_id)d" % {"instance_id": instance_id})
+            sudo("initctl %(cmd)s topical-spider SPIDER_ID=%(instance_id)d" % {"instance_id": instance_id,
+                                                                               "cmd": command})
 
+def _upstartCallWorkers(command):
+    if env.host not in common.HOSTS["frontera_workers"]:
+        return
+
+    partitions = FRONTERA_CLUSTER_CONFIG['sw_partitions'][env.host]
+    with cd(FRONTERA_SPIDER_DIR):
+        for instance_id in partitions:
+            sudo("initctl %(cmd)s frontera-strategy-worker WORKER_ID=%(instance_id)d" % {
+                "instance_id": instance_id,
+                "cmd": command})
+
+    partitions = FRONTERA_CLUSTER_CONFIG['fw_partitions'][env.host]
+    with cd(FRONTERA_SPIDER_DIR):
+        for instance_id in partitions:
+            sudo("initctl %(cmd)s frontera-worker WORKER_ID=%(instance_id)d" % {
+                "instance_id": instance_id,
+                "cmd": command
+            })
+
+
+def startSpiders():
+    _upstartCallSpiders("start")
 
 def stopSpiders():
-    if env.host not in common.HOSTS["frontera_spiders"]:
-        return
+    _upstartCallSpiders("stop")
 
-    partitions = FRONTERA_CLUSTER_CONFIG['spider_partitions_map'][env.host]
-    with cd(FRONTERA_SPIDER_DIR):
-        for instance_id in partitions:
-            sudo("initctl stop topical-spider SPIDER_ID=%(instance_id)d" % {"instance_id": instance_id})
+def startWorkers():
+    _upstartCallWorkers("start")
+
+def stopWorkers():
+    _upstartCallWorkers("stop")
