@@ -5,8 +5,6 @@ MAX_REQUESTS = 0
 MAX_NEXT_REQUESTS = 4096
 CONSUMER_BATCH_SIZE = 1024
 NEW_BATCH_DELAY = 5.0
-JSONRPC_PORT=6014
-
 
 #--------------------------------------------------------
 # Url storage
