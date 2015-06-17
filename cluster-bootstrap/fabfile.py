@@ -31,8 +31,7 @@ AWS_ACCESSKEY_ID = os.getenv("AWS_ACCESSKEY_ID", "undefined")
 AWS_ACCESSKEY_SECRET = os.getenv("AWS_ACCESSKEY_SECRET", "undefined")
 # In case the instances you use have an extra storage device which is not
 # automatically mounted, specify here the path to that device.
-#EC2_INSTANCE_STORAGEDEV = None
-EC2_INSTANCE_STORAGEDEV = "/dev/xvdb" # For Ubuntu r3.xlarge instances
+EC2_INSTANCE_STORAGEDEV = [("/dev/xvdb", "/mnt"), ("/dev/xvdc", "/mnt1"), ("/dev/xvdd", "/mnt2")]
 
 
 #### Package Information ####
@@ -52,16 +51,18 @@ ZOOKEEPER_PACKAGE_URL = "http://www.whoishostingthis.com/mirrors/apache/zookeepe
                         {'zk': ZOOKEEPER_VERSION}
 ZOOKEEPER_PREFIX = "%s/%s" % (APPS_PREFIX, ZOOKEEPER_PACKAGE)
 
-HBASE_VERSION = "1.0.1"
+HBASE_VERSION = "1.0.1.1"
 HBASE_PACKAGE = "hbase-%s" % (HBASE_VERSION)
-HBASE_PACKAGE_URL = "http://www.whoishostingthis.com/mirrors/apache/hbase/hbase-%(ver)s/hbase-%(ver)s-bin.tar.gz" % \
+HBASE_PACKAGE_URL = "http://www.whoishostingthis.com/mirrors/apache/hbase/%(ver)s/hbase-%(ver)s-bin.tar.gz" % \
                     {"ver": HBASE_VERSION}
 HBASE_PREFIX = "%s/%s" % (APPS_PREFIX, HBASE_PACKAGE)
 HBASE_CONF = "%s/conf" % (HBASE_PREFIX)
 HBASE_ENVIRONMENT_FILE = "%s/hbase-env.sh" % HBASE_CONF
 HBASE_ENVIRONMENT_VARIABLES = [
     ("JAVA_HOME", JAVA_HOME),
-    ("HBASE_MANAGES_ZK", "false")
+    ("HBASE_MANAGES_ZK", "false"),
+    ("HBASE_HEAPSIZE", "8G",),
+    ("HBASE_LIBRARY_PATH", HADOOP_PREFIX + "/lib/native")
 ]
 
 KAFKA_VERSION = "0.8.2.1"
@@ -117,16 +118,16 @@ NET_INTERFACE="eth0"
 CONFIGURATION_FILES_CLEAN = False
 
 HADOOP_TEMP = "/mnt/hadoop/tmp"
-HDFS_DATA_DIR = "/mnt/hdfs/datanode"
-HDFS_NAME_DIR = "/mnt/hdfs/namenode"
+HDFS_DATA_DIR = {}
+HDFS_NAME_DIR = {}
 ZK_DATA_DIR = "/var/lib/zookeeper"
 KAFKA_LOG_DIRS = "/mnt/kafka"
 
-IMPORTANT_DIRS = [HADOOP_TEMP, HDFS_DATA_DIR, HDFS_NAME_DIR, ZK_DATA_DIR, KAFKA_LOG_DIRS]
+IMPORTANT_DIRS = [HADOOP_TEMP, ZK_DATA_DIR, KAFKA_LOG_DIRS]
 
 # Need to do this in a function so that we can rewrite the values when any
 # of the hosts change in runtime (e.g. EC2 node discovery).
-def updateHadoopSiteValues():
+def _updateHadoopSiteValues():
     global CORE_SITE_VALUES, HDFS_SITE_VALUES, YARN_SITE_VALUES, MAPRED_SITE_VALUES, HBASE_SITE_VALUES
 
     CORE_SITE_VALUES = {
@@ -137,9 +138,12 @@ def updateHadoopSiteValues():
     }
 
     HDFS_SITE_VALUES = {
-        "dfs.datanode.data.dir": "file://%s" % HDFS_DATA_DIR,
-        "dfs.namenode.name.dir": "file://%s" % HDFS_NAME_DIR,
+        "dfs.datanode.data.dir": ",".join(map(lambda p: "file://" + p, HDFS_DATA_DIR[env.host])),
+        "dfs.namenode.name.dir": ",".join(map(lambda p: "file://" + p, HDFS_NAME_DIR[env.host])),
         "dfs.permissions": "false",
+        "dfs.replication": "2",
+        "dfs.client.read.shortcircuit": "true",
+        "dfs.domain.socket.path": "/var/lib/hadoop-hdfs/dn_socket"
     }
 
     YARN_SITE_VALUES = {
@@ -174,6 +178,8 @@ def updateHadoopSiteValues():
         "hbase.rootdir": "hdfs://%s:8020/" % common.NAMENODE_HOST,
         "hbase.regionserver.thrift.compact": "true",
         "hbase.regionserver.thrift.framed": "true",
+        "dfs.client.read.shortcircuit": "true",
+        "dfs.domain.socket.path": "/var/lib/hadoop-hdfs/dn_socket"
     }
 
 ##############################################################
@@ -191,9 +197,8 @@ HBASE_SITE_VALUES = {}
 
 def bootstrapFabric():
     if common.EC2:
+        common._load_ec2_data()
         readHostsFromEC2()
-
-    updateHadoopSiteValues()
 
     env.user = SSH_USER
     hosts = [common.NAMENODE_HOST, common.RESOURCEMANAGER_HOST, common.JOBHISTORY_HOST] + common.SLAVE_HOSTS + \
@@ -213,7 +218,19 @@ def bootstrapFabric():
             (common.JOBHISTORY_HOST, common.JOBHISTORY_PORT)
 
     calcFronteraLayout()
+    _configureHDFSDirectories()
 
+def _configureHDFSDirectories():
+    hadoop_hosts = set(common.SLAVE_HOSTS + [common.RESOURCEMANAGER_HOST, common.NAMENODE_HOST, common.JOBTRACKER_HOST])
+    for host in hadoop_hosts:
+        type = common.INSTANCES[host].instance_type
+        info = common.EC2_INSTANCE_DATA[type]
+        for _, mount_point in EC2_INSTANCE_STORAGEDEV[:info['disks_count']]:
+            data_dir = "%s/hdfs/datanode" % mount_point
+            HDFS_DATA_DIR.setdefault(host, []).append(data_dir)
+
+            name_dir = "%s/hdfs/namenode" % mount_point
+            HDFS_NAME_DIR.setdefault(host, []).append(name_dir)
 
 # MAIN FUNCTIONS
 def forceStopEveryJava():
@@ -236,38 +253,48 @@ def debugHosts():
     print("Frontera cluster config:")
     print frontera.FRONTERA_CLUSTER_CONFIG
 
+def _prepareStorageDevices():
+    with settings(warn_only=True):
+        type = common.INSTANCES[env.host].instance_type
+        info = common.EC2_INSTANCE_DATA[type]
+        for device, mount_point in EC2_INSTANCE_STORAGEDEV[:info['disks_count']]:
+            sudo("umount %s" % mount_point)
+            sudo("mkfs.ext4 %s" % device)
+            sudo("mount -o defaults,noatime %s %s" % (device, mount_point))
+            sudo("chmod 0777 %s" % mount_point)
+        sudo("rm -rf /tmp/hadoop-ubuntu")
 
 def bootstrap():
-    with settings(warn_only=True):
-        if EC2_INSTANCE_STORAGEDEV:
-            if run("mountpoint /mnt"):
-                sudo("umount /mnt")
-            sudo("mkfs.ext4 %s" % EC2_INSTANCE_STORAGEDEV)
-            sudo("mount %s /mnt" % EC2_INSTANCE_STORAGEDEV) # FIXME: mount with noatime
-            sudo("chmod 0777 /mnt")
-            sudo("rm -rf /tmp/hadoop-ubuntu")
+    _prepareStorageDevices()
     ensureImportantDirectoriesExist()
+
     installDependencies()
     installHadoop()
     installZookeeper()
     installHBase()
     installKafka()
-    setupEnvironment()
-    configHadoop()
+
+    if common.isService('hadoop') or common.isService('hbase'):
+        _updateHadoopSiteValues()
+        setupEnvironment()
+        configHadoop()
+
     configZookeeper()
     configHBase()
     configKafka()
     setupHosts()
+
     formatHdfs()
+    cleanup()
 
 def postBootstrap():
-    cleanupHBaseZookeeper()
+    #cleanupHBaseZookeeper()
     deleteFronteraKafkaTopics()
     createFronteraKafkaTopics()
-    createFronteraHBaseNamespace("crawler")
+
 
 @runs_once
-def createFronteraHBaseNamespace(namespace):
+def createHBaseNamespace(namespace):
     if env.host != common.HBASE_MASTER:
         return
 
@@ -301,6 +328,10 @@ def ensureImportantDirectoriesExist():
     for importantDir in IMPORTANT_DIRS:
         ensureDirectoryExists(importantDir)
 
+    if common.isService('hadoop'):
+        for path in HDFS_DATA_DIR[env.host]+HDFS_NAME_DIR[env.host]:
+            ensureDirectoryExists(path)
+        ensureDirectoryExists('/var/lib/hadoop-hdfs')
 
 def installHadoop():
     installDirectory = os.path.dirname(HADOOP_PREFIX)
@@ -344,8 +375,6 @@ def installKafka():
                 run("wget -O %s.tar.gz %s" % (KAFKA_PACKAGE, KAFKA_PACKAGE_URL))
         run("tar --overwrite -xf %s.tar.gz" % KAFKA_PACKAGE)
 
-
-
 def configHadoop():
     changeHadoopProperties(HADOOP_CONF, "core-site.xml", CORE_SITE_VALUES)
     changeHadoopProperties(HADOOP_CONF, "hdfs-site.xml", HDFS_SITE_VALUES)
@@ -362,7 +391,6 @@ def configHBase():
         print >> fh, host
     fh.close()
     put("regionservers", HBASE_CONF + "/")
-    os.remove("regionservers")
 
 def configZookeeper():
     if env.host not in common.ZK_HOSTS:
@@ -379,13 +407,11 @@ def configZookeeper():
         id += 1
     fh.close()
     put("zoo.cfg", ZOOKEEPER_PREFIX + "/conf/")
-    os.remove("zoo.cfg")
 
     fh = open("myid", "w")
     print >> fh, "%d" % (common.ZK_HOSTS.index(env.host) + 1)
     fh.close()
     put("myid", ZK_DATA_DIR + "/")
-    os.remove("myid")
 
 def configKafka():
     if env.host not in common.KAFKA_HOSTS:
@@ -401,7 +427,6 @@ def configKafka():
     fh.write(config)
     fh.close()
     put("server-generated.properties", KAFKA_CONF + "/")
-    os.remove("server-generated.properties")
 
 def configRevertPrevious():
     revertHadoopPropertiesChange("core-site.xml")
@@ -668,7 +693,6 @@ def operationInHadoopEnvironment(operation):
             command = ("./executeInHadoopEnv.sh %s " % ENVIRONMENT_FILE) + command
         run(command)
 
-
 def operationOnHadoopDaemons(operation):
     # Start/Stop NameNode
     if (env.host == common.NAMENODE_HOST):
@@ -690,5 +714,10 @@ def operationOnHadoopDaemons(operation):
     if (env.host == common.JOBHISTORY_HOST):
         operationInHadoopEnvironment(r"\\$HADOOP_PREFIX/sbin/mr-jobhistory-daemon.sh %s historyserver" % operation)
     run("jps")
+
+@runs_once
+def cleanup():
+    for fname in ["server-generated.properties", "regionservers", "myid", "zoo.cfg"]:
+        os.remove(fname)
 
 bootstrapFabric()

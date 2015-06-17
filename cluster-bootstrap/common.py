@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-from fabric.api import sudo
+from fabric.api import sudo, env
+import json
 #### EC2 ####
 # Is this an EC2 deployment? If so, then we'll autodiscover the right nodes.
 EC2 = True
@@ -25,6 +26,7 @@ HOSTS = {
     "frontera_spiders": []
 }
 INSTANCES = {}
+EC2_INSTANCE_DATA = {}
 
 
 # If you'll be running map reduce jobs, you should choose a host to be
@@ -49,7 +51,7 @@ PACKAGE_MANAGER_INSTALL = "apt-get -qq install %s" # Debian/Ubuntu
 # In principle, should just be a JRE for Hadoop, Python
 # for the Hadoop Configuration replacement script and wget
 # to get the Hadoop package
-REQUIREMENTS = ["wget", "python", "openjdk-7-jdk"] # Debian/Ubuntu
+REQUIREMENTS = ["wget", "python", "openjdk-7-jdk", "libsnappy1"] # Debian/Ubuntu
 #REQUIREMENTS = ["wget", "python", "openjdk-7-jre-headless"] # Debian/Ubuntu
 #REQUIREMENTS = ["wget", "python", "jre7-openjdk-headless"] # Arch Linux
 #REQUIREMENTS = ["wget", "python", "java-1.7.0-openjdk-devel"] # CentOS
@@ -154,3 +156,29 @@ def readHostsFromEC2():
 
         if JOBHISTORY_HOST is None:
             JOBHISTORY_HOST = SLAVE_HOSTS[0]
+
+def _load_ec2_data():
+    # To update this table, clone this repo:
+    # https://github.com/powdahound/ec2instances.info
+    # and run 'fab build' command.
+    raw_data = json.load(open("instances.json", "r"))
+    for r in raw_data:
+        disks = (r.get("storage") or {}).get("devices", 0)
+
+        EC2_INSTANCE_DATA[r["instance_type"]] = {
+            "instance_type": r["instance_type"],
+            "cpucores": r["vCPU"],
+            "ram": r["memory"],
+            "disks_count": disks
+        }
+
+def isService(service):
+    if service=='hadoop':
+        if env.host in SLAVE_HOSTS or env.host in [NAMENODE_HOST, RESOURCEMANAGER_HOST, JOBTRACKER_HOST]:
+            return True
+        return False
+    if service=='hbase':
+        if env.host in HBASE_RS or env.host == HBASE_MASTER:
+            return True
+        return False
+    raise NotImplementedError('Unknown service')

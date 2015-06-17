@@ -7,7 +7,6 @@ from fabric.api import run, cd, env, settings, put, sudo
 from fabric.decorators import runs_once, parallel
 from fabric.tasks import execute
 
-EC2_INSTANCE_DATA = {}
 FRONTERA_TAG = "v.1"
 FRONTERA_DEST_DIR = "/home/ubuntu/frontera"
 FRONTERA_SPIDER_DIR = "/home/ubuntu/topical-spiders"
@@ -206,26 +205,11 @@ def bootstrapFrontera():
         generateWorkersStartupScripts()
 
 
-def _load_ec2_data():
-    # To update this table, clone this repo:
-    # https://github.com/powdahound/ec2instances.info
-    # and run 'fab build' command.
-    raw_data = json.load(open("instances.json", "r"))
-    for r in raw_data:
-        disks = (r.get("storage") or {}).get("devices", 0)
-
-        EC2_INSTANCE_DATA[r["instance_type"]] = {
-            "instance_type": r["instance_type"],
-            "cpucores": r["vCPU"],
-            "ram": r["memory"],
-            "disks_count": disks
-        }
-
 def calcFronteraLayout():
     def cores_iter(hosts):
         for host in hosts:
             type = common.INSTANCES[host].instance_type
-            info = EC2_INSTANCE_DATA[type]
+            info = common.EC2_INSTANCE_DATA[type]
             for i in range(info['cpucores']):
                 yield (host, i)
 
@@ -251,7 +235,6 @@ def calcFronteraLayout():
                 workerMap.setdefault(host, []).append(partition_id)
         return workerMap
 
-    _load_ec2_data()
     spider_cores_count = get_cores_sum(common.HOSTS['frontera_spiders'])
     workers_cores_count = get_cores_sum(common.HOSTS['frontera_workers'])
     FRONTERA_CLUSTER_CONFIG['spider_instances'] = spider_cores_count
