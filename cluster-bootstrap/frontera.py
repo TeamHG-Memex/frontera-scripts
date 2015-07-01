@@ -15,6 +15,7 @@ FRONTERA_SETTINGS_DIR  = FRONTERA_SPIDER_DIR + "/frontier/"
 FRONTERA_SPIDER_BUNDLE = "topical-spiders.tar.gz"
 FRONTERA_CLUSTER_CONFIG = {}
 
+
 def setupDnsmasq():
     fh = open("resolv.dnsmasq.conf", "w")
     print >> fh, """
@@ -80,6 +81,12 @@ def generateSpiderConfigs():
     open("settings.py", "w").write(rendered)
     put("settings.py", FRONTERA_SETTINGS_DIR)
     os.remove("settings.py")
+
+    tpl = open("config-templates/webservice-scrapy-settings_tpl.py").read()
+    rendered = tpl.format(zookeeper_location=common.ZK_HOSTS[0])
+    open("scrapy-settings.py", "w").write(rendered)
+    put("scrapy-settings.py", FRONTERA_SPIDER_DIR + "/topical-spiders/webservice_settings.py")
+    os.remove("scrapy-settings.py")
 
     tpl = open("config-templates/spiderN_tpl.py").read()
     partitions = FRONTERA_CLUSTER_CONFIG['spider_partitions_map'][env.host]
