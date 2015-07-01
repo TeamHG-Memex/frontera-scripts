@@ -9,6 +9,7 @@ from fabric.tasks import execute
 
 FRONTERA_TAG = "v.1"
 FRONTERA_DEST_DIR = "/home/ubuntu/frontera"
+FRONTERA_CRAWLER_DEST_DIR = "/home/ubuntu/frontera-crawler"
 FRONTERA_SPIDER_DIR = "/home/ubuntu/topical-spiders"
 FRONTERA_SETTINGS_DIR  = FRONTERA_SPIDER_DIR + "/frontier/"
 FRONTERA_SPIDER_BUNDLE = "topical-spiders.tar.gz"
@@ -49,22 +50,26 @@ def cloneFrontera():
     run("rm -rf %s" % FRONTERA_DEST_DIR)
     run("git clone -q https://github.com/scrapinghub/frontera.git %s" % FRONTERA_DEST_DIR)
     with cd(FRONTERA_DEST_DIR):
-        #run("git checkout -q %s" % FRONTERA_TAG)
-        run("git checkout distributed")
+        # run("git checkout -q %s" % FRONTERA_TAG)
+        run("git checkout distributed-hgmemex")
 
     # adding Frontera to python module path
     python_path = "/usr/lib/python2.7/dist-packages/ubuntu.pth"
     sudo("rm -f %s" % python_path)
     fh = open("ubuntu.pth", "w")
     print >> fh, FRONTERA_DEST_DIR
+    print >> fh, FRONTERA_CRAWLER_DEST_DIR
     fh.close()
     put("ubuntu.pth", python_path, use_sudo=True)
     os.remove("ubuntu.pth")
 
 def deploySpiders():
     put(FRONTERA_SPIDER_BUNDLE)
+    fc_name = "frontera-crawler.tar.gz"
+    put(fc_name)
     fname = os.path.basename(FRONTERA_SPIDER_BUNDLE)
     run("tar --overwrite -xf %s" % fname)
+    run("tar --overwrite -xf %s" % fc_name)
 
 def generateSpiderConfigs():
     if env.host not in common.HOSTS["frontera_spiders"]:
@@ -94,7 +99,8 @@ def generateWorkersConfigs():
     thrift_servers = str(", ").join(map(lambda rs_host: "'%s'" % rs_host, common.HBASE_RS))
     rendered = tpl.format(thrift_servers_list=thrift_servers,
                           partitions_count=FRONTERA_CLUSTER_CONFIG['spider_instances'],
-                          kafka_location=common.KAFKA_HOSTS[0])
+                          kafka_location=common.KAFKA_HOSTS[0],
+                          zookeeper_location=common.ZK_HOSTS[0])
     fh = open("workersettings.py", "w")
     fh.write(rendered)
     fh.close()
@@ -125,7 +131,7 @@ description "Topical crawler Scrapy instance"
 setuid ubuntu
 script
     cd %(spider_dir)s
-    scrapy crawl score -a topic_dict=topical-spiders/ht_dict_sorted_abc.txt -a disable_classifier=1 -s FRONTIER_SETTINGS=frontier.spider$SPIDER_ID --logfile=spider$SPIDER_ID.log -L INFO
+    scrapy crawl score -s FRONTIER_SETTINGS=frontier.spider$SPIDER_ID --logfile=spider$SPIDER_ID.log -L INFO
 end script
 """ % {"spider_dir": FRONTERA_SPIDER_DIR}
 
@@ -145,8 +151,7 @@ end script
 
     sw_job = job_tpl.format(
        spider_dir=FRONTERA_SPIDER_DIR,
-       cmd="python -m crawlfrontier.worker.score --config frontier.strategy$WORKER_ID " \
-              "--strategy frontier.strategy.topic",
+       cmd="python -m fronteracrawler.worker.strategy --config frontier.strategy$WORKER_ID",
        descr="Frontera strategy worker for topical crawler"
     )
 
@@ -154,7 +159,7 @@ end script
 
     fw_job = job_tpl.format(
         spider_dir=FRONTERA_SPIDER_DIR,
-        cmd="python -m crawlfrontier.worker.main --config frontier.workersettings --no-batches --no-scoring",
+        cmd="python -m fronteracrawler.worker.main --config frontier.workersettings --no-batches --no-scoring",
         descr="Frontera common worker"
     )
     _create_and_put_startup_script(fw_job, "frontera-worker.conf")
@@ -170,14 +175,14 @@ end script
 """
     b_job = single_job_tpl.format(
         spider_dir=FRONTERA_SPIDER_DIR,
-        cmd="python -m crawlfrontier.worker.main --config frontier.workersettings --no-incoming --no-scoring",
+        cmd="python -m fronteracrawler.worker.main --config frontier.workersettings --no-incoming --no-scoring",
         descr="Frontera new batches generator"
     )
     _create_and_put_startup_script(b_job, "frontera-batch-generator.conf")
 
     fs_job = single_job_tpl.format(
         spider_dir=FRONTERA_SPIDER_DIR,
-        cmd="python -m crawlfrontier.worker.main --config frontier.workersettings --no-batches --no-incoming",
+        cmd="python -m fronteracrawler.worker.main --config frontier.workersettings --no-batches --no-incoming",
         descr="Frontera scoring worker"
     )
     _create_and_put_startup_script(fs_job, "frontera-scoring-worker.conf")
@@ -196,11 +201,14 @@ def bootstrapFrontera():
         installDependencies(["dnsmasq", "python-lxml", "python-openssl", "python-w3lib",
                              "python-cssselect"], pre_commands=False)
         setupDnsmasq()
-        sudo("pip install -q nltk scrapy")
+        # manual nltk.download() is still needed there
+        sudo("pip install -q nltk scrapy==0.24.6 kazoo")
         generateSpiderConfigs()
         generateSpiderStartupScripts()
 
     if env.host in common.HOSTS["frontera_workers"]:
+        installDependencies(["python-lxml", "python-w3lib", "python-cssselect"], pre_commands=False)
+        sudo("pip install -q nltk scrapy==0.24.6 kazoo")
         generateWorkersConfigs()
         generateWorkersStartupScripts()
 
