@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import os, os.path
+import shutil
 from common import installDependencies
 import common
 import json
@@ -12,7 +13,13 @@ FRONTERA_DEST_DIR = "/home/ubuntu/frontera"
 FRONTERA_CRAWLER_DEST_DIR = "/home/ubuntu/frontera-crawler"
 FRONTERA_SPIDER_DIR = "/home/ubuntu/topical-spiders"
 FRONTERA_SETTINGS_DIR  = FRONTERA_SPIDER_DIR + "/frontier/"
+
+FRONTERA_SPIDER_REPO = "https://github.com/TeamHG-Memex/topical-spiders.git"
 FRONTERA_SPIDER_BUNDLE = "topical-spiders.tar.gz"
+FRONTERA_SPIDER_DIR = "topical-spiders"
+FRONTERA_CRAWLER_BUNDLE = "frontera-crawler.tar.gz"
+FRONTERA_CRAWLER_DIR = "frontera-crawler"
+FRONTERA_CRAWLER_REPO = "https://github.com/TeamHG-Memex/frontera-crawler.git"
 FRONTERA_CLUSTER_CONFIG = {}
 
 
@@ -66,8 +73,8 @@ def cloneFrontera():
 
 def deploySpiders():
     put(FRONTERA_SPIDER_BUNDLE)
-    fc_name = "frontera-crawler.tar.gz"
-    put(fc_name)
+    put(FRONTERA_CRAWLER_BUNDLE)
+    fc_name = os.path.basename(FRONTERA_CRAWLER_BUNDLE)
     fname = os.path.basename(FRONTERA_SPIDER_BUNDLE)
     run("tar --overwrite -xf %s" % fname)
     run("tar --overwrite -xf %s" % fc_name)
@@ -194,6 +201,23 @@ end script
     )
     _create_and_put_startup_script(fs_job, "frontera-scoring-worker.conf")
 
+@runs_once
+def prepareBundles():
+    if os.path.exists(FRONTERA_SPIDER_DIR):
+        shutil.rmtree(FRONTERA_SPIDER_DIR)
+    if os.system("git clone -q %s %s" % (FRONTERA_SPIDER_REPO, FRONTERA_SPIDER_DIR)):
+        raise Exception("Git cloning error.")
+    if os.system("tar --exclude=.git* -czf %s %s" % (FRONTERA_SPIDER_BUNDLE, FRONTERA_SPIDER_DIR)):
+        raise Exception("Taring error.")
+    shutil.rmtree(FRONTERA_SPIDER_DIR)
+
+    if os.path.exists(FRONTERA_CRAWLER_DIR):
+        shutil.rmtree(FRONTERA_CRAWLER_DIR)
+    if os.system("git clone -q %s %s" % (FRONTERA_CRAWLER_REPO, FRONTERA_CRAWLER_DIR)):
+        raise Exception("Git cloning error.")
+    if os.system("tar --exclude=.git* -czf %s %s" % (FRONTERA_CRAWLER_BUNDLE, FRONTERA_CRAWLER_DIR)):
+        raise Exception("Taring error.")
+    shutil.rmtree(FRONTERA_CRAWLER_DIR)
 
 def bootstrapFrontera():
     if env.host not in common.HOSTS["frontera_spiders"] and env.host not in common.HOSTS["frontera_workers"]:
@@ -203,6 +227,8 @@ def bootstrapFrontera():
                          "python-six", "libsnappy-dev"])
     cloneFrontera()
     deploySpiders()
+    prepareBundles()
+
     sudo("pip install -q -r %s/requirements.txt" % FRONTERA_DEST_DIR)
     if env.host in common.HOSTS["frontera_spiders"]:
         installDependencies(["dnsmasq", "python-lxml", "python-openssl", "python-w3lib",
