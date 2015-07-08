@@ -29,9 +29,9 @@ OUTGOING_TOPIC = 'frontier-todo'
 SCORING_GROUP = 'scrapy-scoring'
 SCORING_TOPIC = 'frontier-score'
 
-KAFKA_LOCATION_HH = '{kafka_location}:9092'
-FRONTERA_INCOMING_TOPIC = 'hh-incoming'
-FRONTERA_RESULTS_TOPIC = 'hh-results'
+KAFKA_LOCATION_HH = '52.24.7.16:9092'
+FRONTERA_INCOMING_TOPIC = 'broadcrawler-input'
+FRONTERA_RESULTS_TOPIC = 'broadcrawler-ouput'
 
 ZOOKEEPER_LOCATION = '{zookeeper_location}:2181'
 
