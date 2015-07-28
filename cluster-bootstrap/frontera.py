@@ -16,9 +16,9 @@ FRONTERA_SETTINGS_DIR  = FRONTERA_SPIDER_DIR + "/frontier/"
 
 FRONTERA_SPIDER_REPO = "https://github.com/TeamHG-Memex/topical-spiders.git"
 FRONTERA_SPIDER_BUNDLE = "topical-spiders.tar.gz"
-FRONTERA_SPIDER_DIR = "topical-spiders"
+FRONTERA_SPIDER_DIRNAME = os.path.basename(FRONTERA_SPIDER_DIR)
 FRONTERA_CRAWLER_BUNDLE = "frontera-crawler.tar.gz"
-FRONTERA_CRAWLER_DIR = "frontera-crawler"
+FRONTERA_CRAWLER_DIRNAME = os.path.basename(FRONTERA_CRAWLER_DEST_DIR)
 FRONTERA_CRAWLER_REPO = "https://github.com/TeamHG-Memex/frontera-crawler.git"
 FRONTERA_CLUSTER_CONFIG = {}
 
@@ -166,10 +166,17 @@ end script
     sw_job = job_tpl.format(
        spider_dir=FRONTERA_SPIDER_DIR,
        cmd="python -m fronteracrawler.worker.strategy --config frontier.strategy$WORKER_ID",
-       descr="Frontera strategy worker for topical crawler"
+       descr="Frontera strategy worker slave for topical crawler"
+    )
+    _create_and_put_startup_script(sw_job, "frontera-strategy-worker.conf")
+
+    sw_job_master = job_tpl.format(
+       spider_dir=FRONTERA_SPIDER_DIR,
+       cmd="python -m fronteracrawler.worker.strategy --config frontier.strategy$WORKER_ID --master",
+       descr="Frontera strategy worker master for topical crawler"
     )
 
-    _create_and_put_startup_script(sw_job, "frontera-strategy-worker.conf")
+    _create_and_put_startup_script(sw_job_master, "frontera-strategy-worker-master.conf")
 
     fw_job = job_tpl.format(
         spider_dir=FRONTERA_SPIDER_DIR,
@@ -203,21 +210,21 @@ end script
 
 @runs_once
 def prepareBundles():
-    if os.path.exists(FRONTERA_SPIDER_DIR):
-        shutil.rmtree(FRONTERA_SPIDER_DIR)
-    if os.system("git clone -q %s %s" % (FRONTERA_SPIDER_REPO, FRONTERA_SPIDER_DIR)):
+    if os.path.exists(FRONTERA_SPIDER_DIRNAME):
+        shutil.rmtree(FRONTERA_SPIDER_DIRNAME)
+    if os.system("git clone -q %s %s" % (FRONTERA_SPIDER_REPO, FRONTERA_SPIDER_DIRNAME)):
         raise Exception("Git cloning error.")
-    if os.system("tar --exclude=.git* -czf %s %s" % (FRONTERA_SPIDER_BUNDLE, FRONTERA_SPIDER_DIR)):
+    if os.system("tar --exclude=.git* -czf %s %s" % (FRONTERA_SPIDER_BUNDLE, FRONTERA_SPIDER_DIRNAME)):
         raise Exception("Taring error.")
-    shutil.rmtree(FRONTERA_SPIDER_DIR)
+    shutil.rmtree(FRONTERA_SPIDER_DIRNAME)
 
-    if os.path.exists(FRONTERA_CRAWLER_DIR):
-        shutil.rmtree(FRONTERA_CRAWLER_DIR)
-    if os.system("git clone -q %s %s" % (FRONTERA_CRAWLER_REPO, FRONTERA_CRAWLER_DIR)):
+    if os.path.exists(FRONTERA_CRAWLER_DIRNAME):
+        shutil.rmtree(FRONTERA_CRAWLER_DIRNAME)
+    if os.system("git clone -q %s %s" % (FRONTERA_CRAWLER_REPO, FRONTERA_CRAWLER_DIRNAME)):
         raise Exception("Git cloning error.")
-    if os.system("tar --exclude=.git* -czf %s %s" % (FRONTERA_CRAWLER_BUNDLE, FRONTERA_CRAWLER_DIR)):
+    if os.system("tar --exclude=.git* -czf %s %s" % (FRONTERA_CRAWLER_BUNDLE, FRONTERA_CRAWLER_DIRNAME)):
         raise Exception("Taring error.")
-    shutil.rmtree(FRONTERA_CRAWLER_DIR)
+    shutil.rmtree(FRONTERA_CRAWLER_DIRNAME)
 
 def bootstrapFrontera():
     if env.host not in common.HOSTS["frontera_spiders"] and env.host not in common.HOSTS["frontera_workers"]:
@@ -305,7 +312,11 @@ def _upstartCallWorkers(command):
 
     with cd(FRONTERA_SPIDER_DIR):
         partitions = FRONTERA_CLUSTER_CONFIG['sw_partitions'][env.host]
-        for instance_id in partitions:
+        sudo("initctl %(cmd)s frontera-strategy-worker-master WORKER_ID=%(instance_id)d" % {
+            "instance_id": partitions[0],
+            "cmd": command})
+
+        for instance_id in partitions[1:]:
             sudo("initctl %(cmd)s frontera-strategy-worker WORKER_ID=%(instance_id)d" % {
                 "instance_id": instance_id,
                 "cmd": command})
