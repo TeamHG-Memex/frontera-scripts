@@ -233,8 +233,8 @@ def bootstrapFrontera():
     installDependencies(["build-essential", "libpython-dev", "python-dev", "python-pip", "python-twisted", "git",
                          "python-six", "libsnappy-dev"])
     cloneFrontera()
-    deploySpiders()
     prepareBundles()
+    deploySpiders()
 
     sudo("pip install -q -r %s/requirements.txt" % FRONTERA_DEST_DIR)
     if env.host in common.HOSTS["frontera_spiders"]:
